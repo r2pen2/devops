@@ -1,0 +1,15 @@
+# Pulls new images for containers labelled com.centurylinklabs.watchtower.enable=true and recreates them.
+# containrrr/watchtower is abandoned and speaks Docker API 1.25, which glados's Docker (min 1.44) refuses,
+# so it silently updated nothing. nickfedor/watchtower is the maintained fork, same flags and labels.
+services:
+  watchtower:
+    image: nickfedor/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    command:
+      - --label-enable
+      - --cleanup
+      - --interval
+      - "300"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

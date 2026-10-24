@@ -1,0 +1,8 @@
+. {
+    hosts /etc/coredns/lan.hosts {
+        fallthrough
+    }
+    forward . 1.1.1.1 8.8.8.8
+    cache 30
+    errors
+}

@@ -1,0 +1,87 @@
+# Grafana OSS + Prometheus + Pushgateway (liveness metrics).
+# Runtime on glados: /opt/services/infra/grafana/compose.yml
+# Secrets: /opt/services/data/app-env/grafana.env (never commit)
+#
+# Required in grafana.env:
+#   GF_SECURITY_ADMIN_PASSWORD=...
+#
+# Identity comes from Traefik forwardAuth → oauth2-proxy
+# (X-Auth-Request-Email / X-Auth-Request-User). No Grafana Google OAuth.
+
+services:
+  pushgateway:
+    image: prom/pushgateway:v1.11.1
+    container_name: pushgateway
+    restart: unless-stopped
+    command:
+      - --web.enable-lifecycle
+      - --persistence.file=/data/pushgateway.data
+      - --persistence.interval=5m
+    ports:
+      - "127.0.0.1:9091:9091"
+    volumes:
+      - ${GRAFANA_PUSHGATEWAY_DATA_PATH:-/opt/services/data/app-assets/grafana/pushgateway}:/data
+    networks:
+      - grafana_internal
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=45d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${GRAFANA_PROMETHEUS_DATA_PATH:-/opt/services/data/app-assets/grafana/prometheus}:/prometheus
+    depends_on:
+      - pushgateway
+    networks:
+      - grafana_internal
+
+  grafana:
+    image: grafana/grafana-oss:12.1.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?set GF_SECURITY_ADMIN_PASSWORD in grafana.env}
+      GF_SERVER_ROOT_URL: ${GF_SERVER_ROOT_URL:-https://grafana.joed.dev}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: ${GF_USERS_AUTO_ASSIGN_ORG_ROLE:-Admin}
+      # Trust identity headers from Traefik sso@file (oauth2-proxy)
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-Auth-Request-Email
+      GF_AUTH_PROXY_HEADER_PROPERTY: email
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_PROXY_HEADERS: Name:X-Auth-Request-User Email:X-Auth-Request-Email
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_SIGNOUT_REDIRECT_URL: https://auth.joed.dev/oauth2/sign_out?rd=https://grafana.joed.dev/
+      GF_AUTH_GOOGLE_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ${GRAFANA_DATA_PATH:-/opt/services/data/app-assets/grafana/grafana}:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - proxy
+      - grafana_internal
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+      traefik.http.routers.grafana.rule: Host(`grafana.joed.dev`)
+      traefik.http.routers.grafana.entrypoints: web
+      traefik.http.routers.grafana.middlewares: sso@file
+      traefik.http.services.grafana.loadbalancer.server.port: "3000"
+
+networks:
+  proxy:
+    external: true
+  grafana_internal:
+    driver: bridge

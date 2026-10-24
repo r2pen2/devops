@@ -1,0 +1,30 @@
+# Bypass SSO for Home Assistant paths that use HA's own auth (tokens /
+# login), not the Google oauth2-proxy cookie.
+#
+# Two clients hit these without an SSO cookie:
+#
+# 1. Google HomeGraph fulfillment + Google Home account-linking webview
+#    (/api/google_assistant, /auth/*, frontend assets).
+# 2. The Home Assistant Companion app. After login, the native HTTP client
+#    POSTs /api/mobile_app/registrations and then uses /api/websocket with
+#    a Bearer token only — no oauth2-proxy cookie. The dashboard HTML with
+#    ?external_auth=1 is exempted separately in home-assistant-companion.yml.
+#
+# The dashboard root and everything else on home.joed.dev still goes
+# through the home-assistant router (SSO). Security for the exempted
+# paths falls to Home Assistant (the `homeassistant` auth provider and
+# HA access tokens) instead of SSO.
+#
+# Higher explicit priority than the plain Host(...) rule in
+# home-assistant.yml (which has no explicit priority, so it uses Traefik's
+# much lower rule-length-based default) guarantees this one wins whenever
+# both match. Each path type needs its own PathPrefix()/Path() call — this
+# Traefik version's PathPrefix only accepts one argument, not a list.
+http:
+  routers:
+    home-assistant-google-assistant:
+      rule: "Host(`home.joed.dev`) && (PathPrefix(`/auth/`) || PathPrefix(`/api`) || PathPrefix(`/.well-known`) || PathPrefix(`/frontend_latest/`) || PathPrefix(`/frontend_es5/`) || PathPrefix(`/static/`) || PathPrefix(`/local/`) || PathPrefix(`/hacsfiles/`) || Path(`/manifest.json`))"
+      priority: 100
+      entryPoints:
+        - web
+      service: home-assistant

@@ -4,20 +4,25 @@ The platform team's repo: everything that keeps **glados** running and ships eve
 Apps live in their own repos; this repo runs them.
 
 ```
-ci/               shared build/deploy for every app repo (was r2pen2/deploy-infra-actions)
-  actions/          composite actions: build-push, deploy-prod, detect-changed, qa-deploy, qa-cleanup, tooling
-  scripts/          what the actions run
-  runners.json      which repos get a glados runner
-host/glados/      the machine: cloudflared, docker networks, cron              (being pulled in from glados)
-ingress/          traefik (incl. the sso@file middleware), oauth2-proxy        (being pulled in from glados)
-updates/          watchtower                                                   (being pulled in from glados)
-observability/    grafana, status, liveness; tracing/metrics backends go here  (being pulled in from glados)
-dns/              joed.dev zone + Cloudflare tunnel routes
-apps/             upstream images nobody here writes (beaverhabits, umami, …)
+ci/                 shared build/deploy for every app repo (was r2pen2/deploy-infra-actions)
+  actions/            composite actions: build-push, deploy-prod, detect-changed, qa-deploy, qa-cleanup, tooling
+  scripts/            what the actions run, plus deploy-stacks.mjs
+  runners.json        which repos get a glados runner
+stacks.json         the platform stacks below → /opt/services/infra/<name> on glados
+host/glados/        cloudflared (tunnel + autoheal), coredns (LAN DNS overrides)
+ingress/            traefik (incl. the sso@file middleware), oauth2-proxy + sso-bounce
+observability/      grafana + prometheus + pushgateway, dozzle (logs.joed.dev), umami (analytics.joed.dev)
+updates/            watchtower
 ```
 
-**Secrets are never committed.** They live on glados under `/opt/services/data/app-env/` (written by the workflow that
-needs them, from this repo's Actions secrets), and compose files reference them with `env_file:` or `${VAR}`.
+Push to main → **Deploy stacks** installs whatever changed (backup first, health + SSO check after, restore on
+failure). Only files in this repo are written: `traefik/dynamic/billing-blocks.yml` belongs to WL-Universe's
+site-billing, which rewrites it at runtime. Run it from Actions with *dry run* to see the diff against glados.
+
+Apps, upstream images included, have their own repos (e.g. r2pen2/bindarr) and deploy through `ci/`.
+
+**Secrets are never committed.** They live on glados under `/opt/services/data/app-env/` and reach containers through
+`envFile` in stacks.json (`docker compose --env-file`) or a compose `env_file:`.
 
 This repo is private. Its reusable workflows and actions are shared with r2pen2's other private repos
 (Settings → Actions → Access: "Accessible from repositories owned by r2pen2").
@@ -105,6 +110,6 @@ sudo ~/actions-runner-devops/svc.sh install && sudo ~/actions-runner-devops/svc.
 ## On glados
 
 - `/opt/services/apps/<serviceDir>/compose.yml`: app stacks (written by `deploy-prod`)
-- `/opt/services/infra/`: platform stacks (being moved under this repo's control)
+- `/opt/services/infra/<stack>/`: platform stacks, written by **Deploy stacks**; backups in `/opt/services/infra/backups/`
 - `/opt/services/data/app-env/`: secrets, `/opt/services/data/app-assets/`: app data
 - **Actions → Inventory glados**: what's running and its config, secrets redacted, as a 1-day artifact

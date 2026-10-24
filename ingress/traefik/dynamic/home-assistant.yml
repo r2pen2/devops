@@ -1,0 +1,15 @@
+# Traefik → host-networked Home Assistant (Cast/mDNS needs network_mode: host).
+http:
+  routers:
+    home-assistant:
+      rule: Host(`home.joed.dev`)
+      entryPoints:
+        - web
+      middlewares:
+        - sso@file
+      service: home-assistant
+  services:
+    home-assistant:
+      loadBalancer:
+        servers:
+          - url: http://172.18.0.1:8123

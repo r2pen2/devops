@@ -1,0 +1,19 @@
+# Companion app WebView: /?external_auth=1 (and OAuth /?auth_callback=1).
+#
+# After device registration the app loads Lovelace with external_auth=1 so
+# the frontend takes tokens from the native bridge, not cookies. SSO on `/`
+# 302s that WebView to Google; Android then opens Chrome, which has no
+# bridge, and the UI sits on "Could not connect to Home Assistant —
+# retrying in 60 seconds".
+#
+# Traefik v3 Query is Query(`key`, `value`) — Query(`key=value`) does not
+# match. Higher priority than the Host-only home-assistant router (SSO).
+# A normal visit to https://home.joed.dev/ still requires Google SSO.
+http:
+  routers:
+    home-assistant-companion:
+      rule: "Host(`home.joed.dev`) && (Query(`external_auth`, `1`) || Query(`auth_callback`, `1`))"
+      priority: 300
+      entryPoints:
+        - web
+      service: home-assistant

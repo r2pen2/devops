@@ -1,0 +1,19 @@
+services:
+  coredns:
+    image: coredns/coredns:1.12.0
+    container_name: coredns
+    restart: unless-stopped
+    command: ["-conf", "/etc/coredns/Corefile"]
+    ports:
+      # Bind to glados LAN IP so we don't fight systemd-resolved on 127.0.0.53.
+      - "10.0.0.172:53:53/udp"
+      - "10.0.0.172:53:53/tcp"
+    volumes:
+      - ./Corefile:/etc/coredns/Corefile:ro
+      - ./lan.hosts:/etc/coredns/lan.hosts:ro
+    networks:
+      - dns
+
+networks:
+  dns:
+    driver: bridge

@@ -1,0 +1,37 @@
+# Platform stacks (stacks.json) → /opt/services/infra on glados. See ci/scripts/deploy-stacks.mjs.
+name: Deploy stacks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "stacks.json"
+      - "host/**"
+      - "ingress/**"
+      - "observability/**"
+      - "updates/**"
+      - "ci/scripts/deploy-stacks.mjs"
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Stacks to deploy (comma-separated), or "all"'
+        default: all
+      dry_run:
+        description: Only show what would change
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-stacks
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, glados]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        env:
+          ONLY: ${{ inputs.only || 'all' }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: node ci/scripts/deploy-stacks.mjs --only "$ONLY" $DRY_RUN
