@@ -18,7 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../..");
+const repoRoot = path.resolve(__dirname, "../../.."); // ci/scripts/runners → repo root
 const DEFAULT_LABELS = ["self-hosted", "glados"];
 
 function parseArgs(argv) {
