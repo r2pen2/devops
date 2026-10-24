@@ -16,7 +16,11 @@ jobs:
           OUT="$RUNNER_TEMP/inventory"
           sudo rm -rf "$OUT"; mkdir -p "$OUT/files"
 
-          sudo docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Label "com.docker.compose.project.config_files"}}' | sort > "$OUT/containers.tsv"
+          sudo docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Label "com.docker.compose.project.config_files"}}	{{.Label "com.docker.compose.project.environment_file"}}' | sort > "$OUT/containers.tsv"
+          : > "$OUT/unhealthy-logs.txt"
+          for c in $(sudo docker ps -a --filter status=restarting --format '{{.Names}}') $(sudo docker ps --format '{{.Names}}\t{{.Status}}' | awk -F'\t' '$2 ~ /seconds|unhealthy/ {print $1}'); do
+            { echo "== $c"; sudo docker logs --tail 15 "$c" 2>&1 | sed -E "s#(://)[^/@ ]+@#\1<redacted>@#g"; } >> "$OUT/unhealthy-logs.txt"
+          done
           sudo docker network ls --format '{{.Name}}\t{{.Driver}}' > "$OUT/networks.tsv"
           sudo docker volume ls --format '{{.Name}}' > "$OUT/volumes.txt"
           sudo find /opt/services -maxdepth 3 -not -path '/opt/services/data/app-assets/*/*' -not -path '*/backups/*' | sort > "$OUT/tree.txt"
