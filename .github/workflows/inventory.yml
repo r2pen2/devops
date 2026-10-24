@@ -21,6 +21,8 @@ jobs:
           for c in $(sudo docker ps -a --filter status=restarting --format '{{.Names}}') $(sudo docker ps --format '{{.Names}}\t{{.Status}}' | awk -F'\t' '$2 ~ /seconds|unhealthy/ {print $1}'); do
             { echo "== $c"; sudo docker logs --tail 15 "$c" 2>&1 | sed -E "s#(://)[^/@ ]+@#\1<redacted>@#g"; } >> "$OUT/unhealthy-logs.txt"
           done
+          { echo "## uptime"; uptime; echo "## memory"; free -m; echo "## previous boot: kernel OOM / hung tasks"; sudo journalctl -b -1 -k --no-pager 2>/dev/null | grep -i -E "out of memory|oom-kill|killed process|hung_task|blocked for more than" | tail -40 || true; echo "## previous boot: last 60 lines"; sudo journalctl -b -1 --no-pager -n 60 2>/dev/null || true; echo "## boots"; sudo journalctl --list-boots --no-pager 2>/dev/null | tail -5 || true; } > "$OUT/host.txt"
+          for c in cloudflared watchtower; do { echo "== $c"; sudo docker logs --tail 40 "$c" 2>&1 | sed -E "s#(://)[^/@ ]+@#\1<redacted>@#g; s#(token[= ]+)[A-Za-z0-9._-]{12,}#\1<redacted>#Ig"; } >> "$OUT/key-logs.txt"; done
           sudo docker network ls --format '{{.Name}}\t{{.Driver}}' > "$OUT/networks.tsv"
           sudo docker volume ls --format '{{.Name}}' > "$OUT/volumes.txt"
           sudo find /opt/services -maxdepth 3 -not -path '/opt/services/data/app-assets/*/*' -not -path '*/backups/*' | sort > "$OUT/tree.txt"
