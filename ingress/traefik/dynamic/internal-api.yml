@@ -1,0 +1,17 @@
+# Read-only slice of Traefik's API for other containers (r2pen2/it's access service, for favicons):
+# GET /api/http/... on the internal entrypoint (:8080, not published to the host or LAN), from Docker
+# network addresses only. No dashboard, no other API paths.
+http:
+  routers:
+    internal-api:
+      rule: "PathPrefix(`/api/http/`) && Method(`GET`)"
+      entryPoints:
+        - internal
+      service: api@internal
+      middlewares:
+        - internal-api-containers
+  middlewares:
+    internal-api-containers:
+      ipAllowList:
+        sourceRange:
+          - 172.16.0.0/12

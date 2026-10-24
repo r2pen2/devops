@@ -11,6 +11,12 @@ services:
       - --entrypoints.web.address=:80
       - --entrypoints.web.forwardedHeaders.insecure=true
       - --accesslog=true
+      # API without the dashboard, reachable only through dynamic/internal-api.yml: GET /api/http/* on an
+      # unpublished :8080, from container addresses. r2pen2/it's access service uses it to find which container
+      # serves each app, to fetch favicons past the sign-in.
+      - --api=true
+      - --api.dashboard=false
+      - --entrypoints.internal.address=:8080
     ports:
       - "80:80"
     volumes:
