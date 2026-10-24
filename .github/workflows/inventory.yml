@@ -21,12 +21,12 @@ jobs:
           sudo docker volume ls --format '{{.Name}}' > "$OUT/volumes.txt"
           sudo find /opt/services -maxdepth 3 -not -path '/opt/services/data/app-assets/*/*' -not -path '*/backups/*' | sort > "$OUT/tree.txt"
           systemctl list-units --type=service --all --no-pager --plain | grep -i -E 'cloudflared|actions|docker|traefik|grafana|prometheus|node_exporter|watchtower' > "$OUT/services.txt" || true
-          { echo "## root"; sudo crontab -l 2>/dev/null || true; echo "## joe"; crontab -l 2>/dev/null || true; echo "## /etc/cron.d"; ls /etc/cron.d; } > "$OUT/cron.txt"
+          { echo "## root"; sudo crontab -l 2>/dev/null || true; echo "## joe"; crontab -l 2>/dev/null || true; echo "## /etc/cron.d"; ls /etc/cron.d 2>/dev/null || true; } > "$OUT/cron.txt"
 
           # Every compose file a running container came from, plus everything under /opt/services/infra and /etc/cloudflared.
           {
             sudo docker ps -a --format '{{.Label "com.docker.compose.project.config_files"}}' | tr ',' '\n'
-            sudo find /opt/services/infra /etc/cloudflared -type f -not -path '*/backups/*' -size -256k 2>/dev/null
+            sudo find /opt/services/infra /etc/cloudflared /home/joe/.cloudflared -type f -not -path '*/backups/*' -size -256k 2>/dev/null || true
           } | grep -v '^$' | sort -u > "$OUT/sources.txt"
 
           secretish='(secret|password|passwd|token|api[_-]?key|private[_-]?key|credential|client[_-]?id|cookie|auth[_-]?key|dsn|webhook)'
