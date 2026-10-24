@@ -1,4 +1,3 @@
 # LAN-only overrides. Everything else is forwarded upstream by CoreDNS.
 10.0.0.172 wl-status.joed.dev
 10.0.0.172 fit.joed.dev
-10.0.0.172 beaverhabits.joed.dev
