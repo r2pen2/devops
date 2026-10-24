@@ -1,0 +1,39 @@
+# Take apps off glados: stop them, keep one tarball of everything they had, remove the rest.
+# The tarball (/opt/services/data/archive/<app>-<date>.tar.gz) holds /opt/services/apps/<app>,
+# /opt/services/data/app-assets/<app> and /opt/services/data/app-env/<app>.env, so an app can be restored.
+name: Retire apps
+
+on:
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: Apps (serviceDir names under /opt/services/apps), comma-separated
+        required: true
+
+jobs:
+  retire:
+    runs-on: [self-hosted, glados]
+    steps:
+      - env:
+          APPS: ${{ inputs.apps }}
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /opt/services/data/archive
+          for app in ${APPS//,/ }; do
+            case "$app" in ""|*/*|.*) echo "::error::bad app name '$app'"; exit 1 ;; esac
+            dir=/opt/services/apps/$app
+            sudo test -f "$dir/compose.yml" || { echo "::error::$dir/compose.yml not found"; exit 1; }
+            echo "::group::$app"
+            images=$(sudo docker compose -f "$dir/compose.yml" config --images 2>/dev/null || true)
+            sudo docker compose -f "$dir/compose.yml" down --remove-orphans
+            paths=("${dir#/}")
+            sudo test -e "/opt/services/data/app-assets/$app" && paths+=("opt/services/data/app-assets/$app")
+            sudo test -e "/opt/services/data/app-env/$app.env" && paths+=("opt/services/data/app-env/$app.env")
+            tarball=/opt/services/data/archive/$app-$(date +%Y%m%d-%H%M%S).tar.gz
+            sudo tar -czf "$tarball" -C / "${paths[@]}"
+            sudo tar -tzf "$tarball" > /dev/null
+            echo "archived: ${paths[*]} -> $tarball ($(sudo du -h "$tarball" | cut -f1))"
+            for p in "${paths[@]}"; do sudo rm -rf "/$p"; done
+            for img in $images; do sudo docker image rm "$img" 2>/dev/null && echo "removed image $img" || true; done
+            echo "::endgroup::"
+          done
