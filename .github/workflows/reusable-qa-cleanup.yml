@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: r2pen2/deploy-infra-actions/actions/qa-cleanup@main
+      - uses: r2pen2/devops/ci/actions/qa-cleanup@main
         with:
           catalog: ${{ inputs.catalog }}
           pr: ${{ github.event.pull_request.number }}
@@ -37,6 +37,8 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: r2pen2/devops/ci/actions/tooling@main
+
       - name: Mark torn down
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,5 +46,4 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/r2pen2/deploy-infra-actions.git .deploy-infra
           node .deploy-infra/scripts/qa/comment-pr.mjs --pr "$PR" --teardown || true

@@ -1,0 +1,60 @@
+# What's actually running on glados, and the config behind it, as a 1-day artifact.
+# Secrets never leave glados: *.env files are reduced to their key names, secret-looking values in
+# config files are replaced with <redacted>, and key/cert/credential files are listed but not copied.
+name: Inventory glados
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inventory:
+    runs-on: [self-hosted, glados]
+    steps:
+      - name: Collect
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/inventory"
+          sudo rm -rf "$OUT"; mkdir -p "$OUT/files"
+
+          sudo docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Label "com.docker.compose.project.config_files"}}' | sort > "$OUT/containers.tsv"
+          sudo docker network ls --format '{{.Name}}\t{{.Driver}}' > "$OUT/networks.tsv"
+          sudo docker volume ls --format '{{.Name}}' > "$OUT/volumes.txt"
+          sudo find /opt/services -maxdepth 3 -not -path '/opt/services/data/app-assets/*/*' -not -path '*/backups/*' | sort > "$OUT/tree.txt"
+          systemctl list-units --type=service --all --no-pager --plain | grep -i -E 'cloudflared|actions|docker|traefik|grafana|prometheus|node_exporter|watchtower' > "$OUT/services.txt" || true
+          { echo "## root"; sudo crontab -l 2>/dev/null || true; echo "## joe"; crontab -l 2>/dev/null || true; echo "## /etc/cron.d"; ls /etc/cron.d; } > "$OUT/cron.txt"
+
+          # Every compose file a running container came from, plus everything under /opt/services/infra and /etc/cloudflared.
+          {
+            sudo docker ps -a --format '{{.Label "com.docker.compose.project.config_files"}}' | tr ',' '\n'
+            sudo find /opt/services/infra /etc/cloudflared -type f -not -path '*/backups/*' -size -256k 2>/dev/null
+          } | grep -v '^$' | sort -u > "$OUT/sources.txt"
+
+          secretish='(secret|password|passwd|token|api[_-]?key|private[_-]?key|credential|client[_-]?id|cookie|auth[_-]?key|dsn|webhook)'
+          : > "$OUT/redactions.txt"; : > "$OUT/skipped.txt"; : > "$OUT/env-keys.txt"
+          while read -r f; do
+            sudo test -f "$f" || { echo "missing $f" >> "$OUT/skipped.txt"; continue; }
+            base="$(basename "$f")"
+            case "$base" in
+              *.env|.env|*.env.*)
+                { echo "== $f"; sudo sed -E -n 's/^([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' "$f"; } >> "$OUT/env-keys.txt"; continue ;;
+              acme.json|*.pem|*.key|*.crt|*.p12|*.pfx|*credentials*|cert.json|*.db|*.sqlite)
+                echo "secret/binary, not copied: $f" >> "$OUT/skipped.txt"; continue ;;
+            esac
+            if ! sudo grep -Iq . "$f"; then echo "binary, not copied: $f" >> "$OUT/skipped.txt"; continue; fi
+            dest="$OUT/files$f"; mkdir -p "$(dirname "$dest")"
+            # KEY: value / KEY=value / "key": "value" with a secret-looking key; ${VAR} references are kept.
+            sudo cat "$f" | sed -E \
+              -e "/\\\$\{[A-Za-z_]/b" \
+              -e "s/^([^:=]*${secretish}[A-Za-z0-9_\"'-]*[\"']?[[:space:]]*[:=][[:space:]]*)[\"']?[^\"'[:space:]#,}]{6,}[\"']?/\1<redacted>/I" \
+              -e "s#(://)[^/@[:space:]\"']+@#\1<redacted>@#g" \
+              -e "s#(webhooks?/)[^[:space:]\"']+#\1<redacted>#Ig" > "$dest"
+            sudo grep -n -i -E "${secretish}[A-Za-z0-9_\"'-]*[\"']?[[:space:]]*[:=]" "$f" | grep -v '\${' | sed -E "s/[:=].*/ (value redacted)/; s#^#$f:#" >> "$OUT/redactions.txt" || true
+          done < "$OUT/sources.txt"
+          sudo chown -R "$(id -u)" "$OUT"
+          echo "copied $(find "$OUT/files" -type f | wc -l) files; $(wc -l < "$OUT/redactions.txt") redacted lines"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glados-inventory
+          path: ${{ runner.temp }}/inventory
+          retention-days: 1

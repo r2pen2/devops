@@ -1,0 +1,19 @@
+name: CI tooling
+description: Put this repo's ci/scripts at <path>/scripts in the workspace, for workflow steps that run them directly
+inputs:
+  path:
+    description: Where to put the tooling, relative to the workspace
+    required: false
+    default: .deploy-infra
+runs:
+  using: composite
+  steps:
+    # devops is private, so callers can't clone it; the runner already fetched this action, scripts included.
+    - shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DEST: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        rm -rf "${DEST}" && mkdir -p "${DEST}"
+        cp -R "${ACTION_PATH}/../../scripts" "${DEST}/scripts"

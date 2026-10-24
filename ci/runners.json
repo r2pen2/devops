@@ -5,9 +5,9 @@
   ],
   "repos": [
     {
-      "repo": "r2pen2/deploy-infra-actions",
-      "name": "glados-deploy-infra",
-      "dir": "actions-runner-deploy-infra",
+      "repo": "r2pen2/devops",
+      "name": "glados-devops",
+      "dir": "actions-runner-devops",
       "note": "Bootstrap this first so register-runners.yml can run on glados."
     },
     {
@@ -49,6 +49,11 @@
       "repo": "r2pen2/access",
       "name": "glados-access",
       "dir": "actions-runner-access"
+    },
+    {
+      "repo": "r2pen2/bindarr",
+      "name": "glados-bindarr",
+      "dir": "actions-runner-bindarr"
     }
   ]
 }

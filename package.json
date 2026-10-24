@@ -1,5 +1,5 @@
 {
-  "name": "deploy-infra-actions",
+  "name": "devops",
   "private": true,
   "type": "module",
   "description": "Shared glados/Traefik/QA deploy tooling for joed.dev app repos",

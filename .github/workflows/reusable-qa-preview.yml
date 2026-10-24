@@ -40,7 +40,7 @@ jobs:
 
       - name: Detect
         id: detect
-        uses: r2pen2/deploy-infra-actions/actions/detect-changed@main
+        uses: r2pen2/devops/ci/actions/detect-changed@main
         with:
           catalog: ${{ inputs.catalog }}
           base: ${{ github.event.pull_request.base.sha }}
@@ -64,7 +64,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - uses: r2pen2/deploy-infra-actions/actions/build-push@main
+      - uses: r2pen2/devops/ci/actions/build-push@main
         with:
           catalog: ${{ inputs.catalog }}
           apps: ${{ needs.detect.outputs.apps_csv }}
@@ -94,7 +94,7 @@ jobs:
         run: echo "${GHCR_PASSWORD}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - id: deploy
-        uses: r2pen2/deploy-infra-actions/actions/qa-deploy@main
+        uses: r2pen2/devops/ci/actions/qa-deploy@main
         with:
           catalog: ${{ inputs.catalog }}
           apps: ${{ needs.detect.outputs.apps_csv }}
@@ -111,6 +111,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: r2pen2/devops/ci/actions/tooling@main
+
       - name: Sticky comment
         env:
           GH_TOKEN: ${{ github.token }}
@@ -121,7 +123,6 @@ jobs:
           DEPLOY_RESULT: ${{ needs.deploy.result }}
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/r2pen2/deploy-infra-actions.git .deploy-infra
           if [[ "${HAS_APPS}" != "true" ]]; then
             node .deploy-infra/scripts/qa/comment-pr.mjs --pr "$PR" --empty
             exit 0

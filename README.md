@@ -1,10 +1,30 @@
-# Shared glados / Traefik / QA deploy tooling for joed.dev app repos.
+# devops
 
-Call these composite actions (or reusable workflows) from any app repo. Keep
-Dockerfiles + compose templates in the app repo; put a `deploy/apps.json`
-catalog next to them.
+The platform team's repo: everything that keeps **glados** running and ships every other repo's code to it.
+Apps live in their own repos; this repo runs them.
 
-## Quick start (single app)
+```
+ci/               shared build/deploy for every app repo (was r2pen2/deploy-infra-actions)
+  actions/          composite actions: build-push, deploy-prod, detect-changed, qa-deploy, qa-cleanup, tooling
+  scripts/          what the actions run
+  runners.json      which repos get a glados runner
+host/glados/      the machine: cloudflared, docker networks, cron              (being pulled in from glados)
+ingress/          traefik (incl. the sso@file middleware), oauth2-proxy        (being pulled in from glados)
+updates/          watchtower                                                   (being pulled in from glados)
+observability/    grafana, status, liveness; tracing/metrics backends go here  (being pulled in from glados)
+dns/              joed.dev zone + Cloudflare tunnel routes
+apps/             upstream images nobody here writes (beaverhabits, umami, …)
+```
+
+**Secrets are never committed.** They live on glados under `/opt/services/data/app-env/` (written by the workflow that
+needs them, from this repo's Actions secrets), and compose files reference them with `env_file:` or `${VAR}`.
+
+This repo is private. Its reusable workflows and actions are shared with r2pen2's other private repos
+(Settings → Actions → Access: "Accessible from repositories owned by r2pen2").
+
+## CI for an app repo
+
+Put a `deploy/apps.json` catalog next to the app's Dockerfiles and compose files, then:
 
 ```yaml
 # .github/workflows/publish.yml
@@ -19,40 +39,17 @@ on:
 
 jobs:
   publish:
-    uses: r2pen2/deploy-infra-actions/.github/workflows/reusable-publish.yml@main
+    uses: r2pen2/devops/.github/workflows/reusable-publish.yml@main
     with:
       catalog: deploy/apps.json
       apps: ${{ inputs.apps || '' }}
     secrets: inherit
 ```
 
-```yaml
-# .github/workflows/qa-preview.yml
-name: QA preview
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+QA previews per PR: `reusable-qa-preview.yml` on `pull_request` (opened, synchronize, reopened) and
+`reusable-qa-cleanup.yml` on `pull_request` (closed). URLs: `https://pr-<n>-<app>.joed.dev`.
 
-jobs:
-  qa:
-    uses: r2pen2/deploy-infra-actions/.github/workflows/reusable-qa-preview.yml@main
-    secrets: inherit
-```
-
-```yaml
-# .github/workflows/qa-preview-cleanup.yml
-name: QA cleanup
-on:
-  pull_request:
-    types: [closed]
-
-jobs:
-  cleanup:
-    uses: r2pen2/deploy-infra-actions/.github/workflows/reusable-qa-cleanup.yml@main
-    secrets: inherit
-```
-
-## Catalog (`deploy/apps.json`)
+### Catalog (`deploy/apps.json`)
 
 ```json
 {
@@ -75,69 +72,39 @@ jobs:
 }
 ```
 
+`"image": false` deploys a compose file for an upstream image without building anything (see r2pen2/bindarr).
 Images publish as `ghcr.io/<owner>/<imagePrefix>-<app>:{latest,sha}` (or `:pr-<n>` for QA).
 
-QA URLs: `https://pr-<n>-<app>.joed.dev`
-
-## Composite actions
+### Actions
 
 | Action | Purpose |
 |--------|---------|
-| `actions/detect-changed` | Diff → apps_csv |
-| `actions/build-push` | docker buildx / docker build → GHCR |
-| `actions/deploy-prod` | glados: copy compose + `up -d` |
-| `actions/qa-deploy` | glados: ephemeral Traefik Host stacks |
-| `actions/qa-cleanup` | glados: tear down PR stacks |
+| `ci/actions/detect-changed` | Diff → apps_csv |
+| `ci/actions/build-push` | docker buildx / docker build → GHCR |
+| `ci/actions/deploy-prod` | glados: copy compose to `/opt/services/apps/<serviceDir>/` + `up -d` |
+| `ci/actions/qa-deploy` | glados: ephemeral Traefik Host stacks |
+| `ci/actions/qa-cleanup` | glados: tear down PR stacks |
+| `ci/actions/tooling` | Puts `ci/scripts` in the workspace (callers can't clone this private repo) |
 
-Example (monorepo with custom build still OK):
+## Runners
 
-```yaml
-- uses: r2pen2/deploy-infra-actions/actions/deploy-prod@main
-  with:
-    catalog: deploy/apps.json
-    apps: ${{ needs.detect.outputs.apps_csv }}
-    sha: ${{ github.sha }}
-```
+Self-hosted runner labels: `self-hosted`, `glados`, registered per repo. The list is
+[`ci/runners.json`](ci/runners.json); a PR adding a repo there registers it on glados (and comments the result), and
+**Actions → Register glados runners** syncs `all` or a list.
 
-## Runner requirements
+Secret `RUNNER_ADMIN_PAT` must be able to mint runner registration tokens for every listed repo, including this one.
 
-Self-hosted runner labels: `self-hosted`, `glados`  
-(register **per consumer repo** — GitHub runners are repo-scoped).
-
-### Registering runners from this repo
-
-Canonical list: [`runners.json`](./runners.json).
-
-| Trigger | Behavior |
-|---------|----------|
-| PR that changes `runners.json` | Registers **newly added** repos on glados |
-| Push to `main` touching the list | Same (added repos only) |
-| Actions → **Register glados runners** | Sync `all` or a comma-separated repo list |
-
-Workflow: [`.github/workflows/register-runners.yml`](./.github/workflows/register-runners.yml)
-
-**Bootstrap (once):** this repo needs its own glados runner before the workflow can run:
+Bootstrap (once, on glados):
 
 ```bash
-# on glados, with gh authed as a user that can admin the repo
-export RUNNER_ADMIN_PAT=ghp_...   # or gh auth login
-node scripts/runners/register.mjs --from-list runners.json --only r2pen2/deploy-infra-actions
-sudo ~/actions-runner-deploy-infra/svc.sh install   # if not already a service
-sudo ~/actions-runner-deploy-infra/svc.sh start
+export RUNNER_ADMIN_PAT=ghp_...
+node ci/scripts/runners/register.mjs --from-list ci/runners.json --only r2pen2/devops
+sudo ~/actions-runner-devops/svc.sh install && sudo ~/actions-runner-devops/svc.sh start
 ```
 
-Secret on this repo: `RUNNER_ADMIN_PAT` — must mint Actions runner registration tokens for every listed consumer repo.
+## On glados
 
-To onboard a new app repo: add it to `runners.json` in a PR; merge after the registration job comments success.
-
-Runtime paths on glados:
-
-- `/opt/services/apps/<serviceDir>/compose.yml`
-- `/opt/services/data/app-env/`
-- `/opt/services/data/app-assets/qa/`
-
-## Migrated consumers
-
-- `WL-Universe` — multi-SPA + mail DNS (catalog + thin workflows)
-- `citrus` — api/web/native/mongo
-- `nutrifit` — static/nginx example using reusable workflows only
+- `/opt/services/apps/<serviceDir>/compose.yml`: app stacks (written by `deploy-prod`)
+- `/opt/services/infra/`: platform stacks (being moved under this repo's control)
+- `/opt/services/data/app-env/`: secrets, `/opt/services/data/app-assets/`: app data
+- **Actions → Inventory glados**: what's running and its config, secrets redacted, as a 1-day artifact

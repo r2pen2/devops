@@ -7,9 +7,9 @@
  *   GH_TOKEN / RUNNER_ADMIN_PAT / GITHUB_TOKEN (current repo only)
  *
  *   node scripts/runners/register.mjs --repo r2pen2/nutrifit
- *   node scripts/runners/register.mjs --from-list runners.json
- *   node scripts/runners/register.mjs --from-list runners.json --only r2pen2/nutrifit,r2pen2/citrus
- *   node scripts/runners/register.mjs --from-list runners.json --dry-run
+ *   node ci/scripts/runners/register.mjs --from-list ci/runners.json
+ *   node ci/scripts/runners/register.mjs --from-list ci/runners.json --only r2pen2/nutrifit,r2pen2/citrus
+ *   node ci/scripts/runners/register.mjs --from-list ci/runners.json --dry-run
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -44,7 +44,7 @@ function parseArgs(argv) {
     else if (a === "--home" && argv[i + 1]) args.home = argv[++i];
   }
   if (!args.list && !args.repo) {
-    throw new Error("Provide --from-list runners.json and/or --repo owner/name");
+    throw new Error("Provide --from-list ci/runners.json and/or --repo owner/name");
   }
   return args;
 }

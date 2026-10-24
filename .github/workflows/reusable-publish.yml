@@ -56,6 +56,8 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: r2pen2/devops/ci/actions/tooling@main
+
       - name: Pick apps
         id: pick
         env:
@@ -66,10 +68,6 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          # Checkout deploy-infra scripts via action path isn't available here;
-          # clone sibling tooling from this repo when called as reusable.
-          # Caller must have the catalog; we use npx-free inline by checking out infra.
-          git clone --depth 1 https://github.com/r2pen2/deploy-infra-actions.git .deploy-infra
 
           if [[ -n "${INPUT_APPS}" && "${INPUT_APPS}" != "all" ]]; then
             csv="${INPUT_APPS}"
@@ -131,7 +129,7 @@ jobs:
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        uses: r2pen2/deploy-infra-actions/actions/build-push@main
+        uses: r2pen2/devops/ci/actions/build-push@main
         with:
           catalog: ${{ inputs.catalog }}
           apps: ${{ needs.detect.outputs.build_csv }}
@@ -151,7 +149,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy
-        uses: r2pen2/deploy-infra-actions/actions/deploy-prod@main
+        uses: r2pen2/devops/ci/actions/deploy-prod@main
         with:
           catalog: ${{ inputs.catalog }}
           apps: ${{ needs.detect.outputs.apps_csv }}

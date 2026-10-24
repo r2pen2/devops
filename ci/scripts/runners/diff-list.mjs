@@ -7,7 +7,7 @@
 import { execFileSync } from "node:child_process";
 
 function parseArgs(argv) {
-  const args = { base: null, head: "HEAD", json: false, file: "runners.json" };
+  const args = { base: null, head: "HEAD", json: false, file: "ci/runners.json" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--base" && argv[i + 1]) args.base = argv[++i];

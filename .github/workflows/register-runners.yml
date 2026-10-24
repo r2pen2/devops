@@ -3,7 +3,7 @@
 # On PRs that change runners.json, registers newly added repos on glados.
 # Also supports workflow_dispatch to sync the full list (or specific repos).
 #
-# Prerequisite: this repo (deploy-infra-actions) already has a glados runner
+# Prerequisite: this repo (devops) already has a glados runner
 # (bootstrap once — see runners.json note). Secret RUNNER_ADMIN_PAT must be able
 # to mint registration tokens for each listed consumer repo.
 
@@ -12,14 +12,14 @@ name: Register glados runners
 on:
   pull_request:
     paths:
-      - "runners.json"
-      - "scripts/runners/**"
+      - "ci/runners.json"
+      - "ci/scripts/runners/**"
       - ".github/workflows/register-runners.yml"
   push:
     branches: [main]
     paths:
-      - "runners.json"
-      - "scripts/runners/**"
+      - "ci/runners.json"
+      - "ci/scripts/runners/**"
       - ".github/workflows/register-runners.yml"
   workflow_dispatch:
     inputs:
@@ -71,7 +71,7 @@ jobs:
           list_csv() {
             node --input-type=module -e '
               import fs from "node:fs";
-              const j = JSON.parse(fs.readFileSync("runners.json","utf8"));
+              const j = JSON.parse(fs.readFileSync("ci/runners.json","utf8"));
               process.stdout.write(j.repos.map((r) => r.repo).join(","));
             '
           }
@@ -86,7 +86,7 @@ jobs:
               mode="sync-selected"
             fi
           elif [[ "${EVENT}" == "pull_request" ]]; then
-            json="$(node scripts/runners/diff-list.mjs --base "${PR_BASE}" --head "${PR_HEAD}" --json)"
+            json="$(node ci/scripts/runners/diff-list.mjs --base "${PR_BASE}" --head "${PR_HEAD}" --json)"
             echo "diff=${json}"
             csv="$(node -e 'const j=JSON.parse(process.argv[1]); process.stdout.write((j.added||[]).join(","))' "${json}")"
             mode="pr-added"
@@ -97,7 +97,7 @@ jobs:
               csv="$(list_csv)"
               mode="push-all"
             else
-              json="$(node scripts/runners/diff-list.mjs --base "${before}" --head "${SHA}" --json)"
+              json="$(node ci/scripts/runners/diff-list.mjs --base "${before}" --head "${SHA}" --json)"
               echo "diff=${json}"
               csv="$(node -e 'const j=JSON.parse(process.argv[1]); process.stdout.write((j.added||[]).join(","))' "${json}")"
               mode="push-added"
@@ -134,7 +134,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${RUNNER_ADMIN_PAT}" ]]; then
-            echo "::error::Secret RUNNER_ADMIN_PAT is not set on deploy-infra-actions"
+            echo "::error::Secret RUNNER_ADMIN_PAT is not set on devops"
             echo "Create a classic PAT (or fine-grained token) that can administer"
             echo "Actions runners on each listed repo, then add it as RUNNER_ADMIN_PAT."
             exit 1
@@ -143,8 +143,8 @@ jobs:
           if [[ "${FORCE}" == "true" ]]; then
             extra+=(--force)
           fi
-          node scripts/runners/register.mjs \
-            --from-list runners.json \
+          node ci/scripts/runners/register.mjs \
+            --from-list ci/runners.json \
             --only "${REPOS_CSV}" \
             "${extra[@]}"
 
