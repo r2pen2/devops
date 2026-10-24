@@ -1,0 +1,27 @@
+# Reusable: install the caller's stacks.json stacks on glados (see ci/scripts/deploy-stacks.mjs).
+# The caller needs a glados runner (ci/runners.json). Secrets its stacks read from env files should be
+# written by an earlier job in the caller's workflow.
+name: Deploy stacks (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      only:
+        description: 'Stacks to deploy (comma-separated), or "all"'
+        type: string
+        default: all
+      dry_run:
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, glados]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r2pen2/devops/ci/actions/tooling@main
+      - name: Deploy
+        env:
+          ONLY: ${{ inputs.only }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: node .deploy-infra/scripts/deploy-stacks.mjs --only "$ONLY" $DRY_RUN

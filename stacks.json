@@ -1,13 +1,48 @@
 {
-  "$comment": "Platform stacks on glados. Each folder is installed file by file into `dest` (files that aren't in the repo are left alone, e.g. traefik/dynamic/billing-blocks.yml, which WL-Universe's site-billing writes). `envFile` is passed to docker compose --env-file. `restart`: containers restarted when a mounted (non-compose) file changes; omit for configs the service watches itself.",
+  "$comment": "Platform stacks on glados (observability ones live in r2pen2/observability). Each folder is installed file by file into `dest` (files that aren't in the repo are left alone, e.g. traefik/dynamic/billing-blocks.yml, which WL-Universe's site-billing writes). `envFile` is passed to docker compose --env-file. `restart`: containers restarted when a mounted (non-compose) file changes; omit for configs the service watches itself. kind \"systemd\": host files installed to absolute paths, then the units are enabled and restarted.",
   "stacks": {
-    "cloudflared": { "src": "host/glados/cloudflared", "dest": "/opt/services/infra/cloudflared", "envFile": "/opt/services/data/app-env/cloudflared.env" },
-    "coredns": { "src": "host/glados/coredns", "dest": "/opt/services/infra/coredns", "restart": ["coredns"] },
-    "traefik": { "src": "ingress/traefik", "dest": "/opt/services/infra/traefik" },
-    "oauth2-proxy": { "src": "ingress/oauth2-proxy", "dest": "/opt/services/infra/oauth2-proxy", "restart": ["sso-bounce"] },
-    "grafana": { "src": "observability/grafana", "dest": "/opt/services/infra/grafana", "envFile": "/opt/services/data/app-env/grafana.env", "restart": ["grafana", "prometheus"] },
-    "dozzle": { "src": "observability/dozzle", "dest": "/opt/services/infra/dozzle" },
-    "umami": { "src": "observability/umami", "dest": "/opt/services/infra/umami", "envFile": "/opt/services/data/app-env/umami.env" },
-    "watchtower": { "src": "updates/watchtower", "dest": "/opt/services/infra/watchtower" }
+    "cloudflared": {
+      "src": "host/glados/cloudflared",
+      "dest": "/opt/services/infra/cloudflared",
+      "envFile": "/opt/services/data/app-env/cloudflared.env"
+    },
+    "coredns": {
+      "src": "host/glados/coredns",
+      "dest": "/opt/services/infra/coredns",
+      "restart": [
+        "coredns"
+      ]
+    },
+    "traefik": {
+      "src": "ingress/traefik",
+      "dest": "/opt/services/infra/traefik"
+    },
+    "oauth2-proxy": {
+      "src": "ingress/oauth2-proxy",
+      "dest": "/opt/services/infra/oauth2-proxy",
+      "restart": [
+        "sso-bounce"
+      ]
+    },
+    "watchtower": {
+      "src": "updates/watchtower",
+      "dest": "/opt/services/infra/watchtower"
+    },
+    "netwatch": {
+      "kind": "systemd",
+      "src": "host/glados/netwatch",
+      "files": {
+        "glados-netwatch": {
+          "to": "/usr/local/sbin/glados-netwatch",
+          "mode": "755"
+        },
+        "glados-netwatch.service": {
+          "to": "/etc/systemd/system/glados-netwatch.service"
+        }
+      },
+      "units": [
+        "glados-netwatch.service"
+      ]
+    }
   }
 }

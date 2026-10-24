@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# glados-netwatch: keep glados on the network without someone power-cycling it.
+#
+# glados is a 2014 MacBook on Wi-Fi. On 2026-10-24 the Wi-Fi dropped, DNS never recovered, and every
+# site was down until a manual power cycle. Every INTERVAL seconds this checks the router (gateway),
+# the internet (1.1.1.1) and DNS, and escalates while they stay broken:
+#
+#   DNS only broken            → restart systemd-resolved
+#   internet broken, level 1   → networkctl reconfigure <iface>   (re-associate, new DHCP lease)
+#                    level 2   → link down/up + restart systemd-networkd
+#                    level 3   → reload the Wi-Fi driver module
+#                    level 4   → reboot, only after REBOOT_AFTER of continuous outage, the machine has been
+#                                up 30 min, and the last netwatch reboot was over 6 h ago
+#
+# Each level waits FAILS checks in a row before acting. Every check is reported to the OpenTelemetry
+# Collector (r2pen2/observability) on 127.0.0.1:4318 as metrics, every action as a log record; the
+# collector keeps them while glados is offline. Actions also go to the journal (journalctl -t glados-netwatch).
+set -u
+
+INTERVAL=${NETWATCH_INTERVAL:-30}
+FAILS=${NETWATCH_FAILS:-3}
+REBOOT_AFTER=${NETWATCH_REBOOT_AFTER:-1200}
+OTLP=${NETWATCH_OTLP:-http://127.0.0.1:4318}
+STATE=/var/lib/glados-netwatch
+mkdir -p "$STATE"
+
+iface() {
+  local i
+  i=$(ip route show default 2>/dev/null | awk '{for (n = 1; n < NF; n++) if ($n == "dev") { print $(n + 1); exit }}')
+  echo "${i:-${NETWATCH_IFACE:-wlp3s0}}"
+}
+gateway() { ip route show default 2>/dev/null | awk '{print $3; exit}'; }
+now_ns() { date +%s%N; }
+
+START_NS=$(now_ns)
+declare -A RESETS=([resolved]=0 [reconfigure]=0 [networkd]=0 [driver]=0 [reboot]=0)
+
+attr() { printf '{"key":"%s","value":{"stringValue":"%s"}}' "$1" "$2"; }
+resource() { printf '{"attributes":[%s,%s,%s]}' "$(attr service.name glados-netwatch)" "$(attr host.name glados)" "$(attr network.interface.name "$(iface)")"; }
+
+otlp() { curl -s -o /dev/null -m 3 -H 'content-type: application/json' -d "$2" "$OTLP/v1/$1" || true; }
+
+emit_metrics() { # up gw_up dns_up rtt_ms
+  local t pts="" a
+  t=$(now_ns)
+  for a in "${!RESETS[@]}"; do
+    pts+="${pts:+,}{\"asInt\":\"${RESETS[$a]}\",\"startTimeUnixNano\":\"$START_NS\",\"timeUnixNano\":\"$t\",\"attributes\":[$(attr action "$a")]}"
+  done
+  gauge() { printf '{"name":"%s","unit":"%s","description":"%s","gauge":{"dataPoints":[{"asDouble":%s,"timeUnixNano":"%s"}]}}' "$1" "$2" "$3" "$4" "$t"; }
+  otlp metrics "{\"resourceMetrics\":[{\"resource\":$(resource),\"scopeMetrics\":[{\"scope\":{\"name\":\"glados-netwatch\"},\"metrics\":[
+    $(gauge glados.network.up '' 'Internet reachable (1.1.1.1)' "$1"),
+    $(gauge glados.network.gateway.up '' 'Router reachable' "$2"),
+    $(gauge glados.network.dns.up '' 'DNS resolves' "$3"),
+    $(gauge glados.network.gateway.rtt ms 'Ping to the router' "$4"),
+    $(gauge glados.netwatch.level '' 'Escalation level (0 = healthy)' "$LEVEL"),
+    {\"name\":\"glados.netwatch.actions\",\"unit\":\"\",\"description\":\"Recovery actions taken\",\"sum\":{\"aggregationTemporality\":2,\"isMonotonic\":true,\"dataPoints\":[$pts]}}
+  ]}]}]}"
+}
+
+log() { # severity(INFO|WARN|ERROR) action message
+  local num=9
+  [ "$1" = WARN ] && num=13
+  [ "$1" = ERROR ] && num=17
+  logger -t glados-netwatch -p "daemon.$([ "$1" = INFO ] && echo info || echo warning)" "$3"
+  local msg=${3//\\/\\\\}
+  msg=${msg//\"/\\\"}
+  otlp logs "{\"resourceLogs\":[{\"resource\":$(resource),\"scopeLogs\":[{\"scope\":{\"name\":\"glados-netwatch\"},\"logRecords\":[{\"timeUnixNano\":\"$(now_ns)\",\"severityNumber\":$num,\"severityText\":\"$1\",\"body\":{\"stringValue\":\"$msg\"},\"attributes\":[$(attr netwatch.action "$2"),$(attr netwatch.level "$LEVEL")]}]}]}]}"
+}
+
+act() { # action message command...
+  local action=$1 message=$2
+  shift 2
+  RESETS[$action]=$((RESETS[$action] + 1))
+  log WARN "$action" "$message"
+  "$@" >/dev/null 2>&1 || log ERROR "$action" "$action failed: $*"
+}
+
+LEVEL=0
+fails=0
+dns_fails=0
+down_since=0
+was_down=0
+while true; do
+  gw=$(gateway)
+  rtt=$( [ -n "$gw" ] && ping -n -c1 -W2 "$gw" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p')
+  gw_up=$([ -n "$rtt" ] && echo 1 || echo 0)
+  up=$(ping -n -c1 -W3 1.1.1.1 >/dev/null 2>&1 && echo 1 || echo 0)
+  dns_up=$(timeout 6 getent ahosts github.com >/dev/null 2>&1 && echo 1 || echo 0)
+
+  if [ "$up" = 1 ]; then
+    if [ "$was_down" = 1 ]; then
+      log INFO recovered "Network back after $(( $(date +%s) - down_since ))s (reached level $LEVEL)"
+    fi
+    LEVEL=0; fails=0; was_down=0
+    if [ "$dns_up" = 0 ]; then
+      dns_fails=$((dns_fails + 1))
+      if [ "$dns_fails" -ge "$FAILS" ]; then
+        act resolved "Internet up but DNS failing ${dns_fails}x; restarting systemd-resolved" systemctl restart systemd-resolved
+        dns_fails=0
+      fi
+    else
+      dns_fails=0
+    fi
+  else
+    [ "$was_down" = 0 ] && { was_down=1; down_since=$(date +%s); log WARN down "Internet unreachable (router $([ "$gw_up" = 1 ] && echo up || echo down), DNS $([ "$dns_up" = 1 ] && echo up || echo down))"; }
+    fails=$((fails + 1))
+    if [ "$fails" -ge "$FAILS" ]; then
+      fails=0
+      LEVEL=$((LEVEL + 1))
+      dev=$(iface)
+      case $LEVEL in
+        1) act reconfigure "Level 1: reconfiguring $dev" networkctl reconfigure "$dev" ;;
+        2) act networkd "Level 2: bouncing $dev and restarting systemd-networkd" sh -c "ip link set '$dev' down; sleep 2; ip link set '$dev' up; systemctl restart systemd-networkd" ;;
+        3)
+          drv=$(basename "$(readlink -f "/sys/class/net/$dev/device/driver/module" 2>/dev/null)" 2>/dev/null)
+          if [ -n "$drv" ] && [ "$drv" != . ]; then
+            act driver "Level 3: reloading Wi-Fi driver $drv" sh -c "modprobe -r '$drv' && sleep 3 && modprobe '$drv' && sleep 5 && networkctl reconfigure '$dev'"
+          else
+            act networkd "Level 3: no driver module found for $dev; restarting systemd-networkd again" systemctl restart systemd-networkd
+          fi
+          ;;
+        *)
+          LEVEL=4
+          outage=$(( $(date +%s) - down_since ))
+          uptime_s=$(cut -d. -f1 /proc/uptime)
+          last=$(cat "$STATE/last-reboot" 2>/dev/null || echo 0)
+          if [ "$outage" -ge "$REBOOT_AFTER" ] && [ "$uptime_s" -ge 1800 ] && [ $(( $(date +%s) - last )) -ge 21600 ]; then
+            date +%s > "$STATE/last-reboot"
+            act reboot "Level 4: offline ${outage}s after every reset; rebooting" systemctl reboot
+          else
+            # Keep cycling the cheaper fixes until a reboot is allowed.
+            LEVEL=0
+          fi
+          ;;
+      esac
+    fi
+  fi
+  emit_metrics "$up" "$gw_up" "$dns_up" "${rtt:-0}"
+  sleep "$INTERVAL"
+done

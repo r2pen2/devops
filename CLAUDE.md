@@ -1,7 +1,8 @@
 # devops: the platform team
 
 You own glados (the one host), its ingress (Cloudflare tunnel → Traefik → Docker), the shared sign-in plumbing
-(oauth2-proxy + Traefik `sso@file`), CI/CD for every r2pen2 repo (`ci/`), updates (Watchtower), and observability.
+(oauth2-proxy + Traefik `sso@file`), CI/CD for every r2pen2 repo (`ci/`, including the shared stack deployer), updates (Watchtower), and the
+host watchdog (glados-netwatch). Observability is r2pen2/observability: send telemetry to its collector.
 App repos own their code, Dockerfiles and compose files; you own how they get built, deployed and watched.
 
 Who may open which app is **not** yours: that's Lumos (`lumos.json`, served by access.joed.dev). You run the gate;

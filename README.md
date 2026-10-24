@@ -6,12 +6,11 @@ Apps live in their own repos; this repo runs them.
 ```
 ci/                 shared build/deploy for every app repo (was r2pen2/deploy-infra-actions)
   actions/            composite actions: build-push, deploy-prod, detect-changed, qa-deploy, qa-cleanup, tooling
-  scripts/            what the actions run, plus deploy-stacks.mjs
+  scripts/            what the actions run, plus deploy-stacks.mjs (shared: reusable-stacks.yml)
   runners.json        which repos get a glados runner
-stacks.json         the platform stacks below → /opt/services/infra/<name> on glados
-host/glados/        cloudflared (tunnel + autoheal), coredns (LAN DNS overrides)
+stacks.json         the platform stacks below → glados
+host/glados/        cloudflared (tunnel + autoheal), coredns (LAN DNS overrides), netwatch (network watchdog)
 ingress/            traefik (incl. the sso@file middleware), oauth2-proxy + sso-bounce
-observability/      grafana + prometheus + pushgateway, dozzle (logs.joed.dev), umami (analytics.joed.dev)
 updates/            watchtower
 ```
 
@@ -19,7 +18,8 @@ Push to main → **Deploy stacks** installs whatever changed (backup first, heal
 failure). Only files in this repo are written: `traefik/dynamic/billing-blocks.yml` belongs to WL-Universe's
 site-billing, which rewrites it at runtime. Run it from Actions with *dry run* to see the diff against glados.
 
-Apps, upstream images included, have their own repos (e.g. r2pen2/bindarr) and deploy through `ci/`.
+Observability (OpenTelemetry Collector, Grafana, Honeycomb, Dozzle, Umami) is r2pen2/observability, deployed
+with the same deployer through `reusable-stacks.yml`. Apps, upstream images included, have their own repos (e.g. r2pen2/bindarr) and deploy through `ci/`.
 
 **Secrets are never committed.** They live on glados under `/opt/services/data/app-env/` and reach containers through
 `envFile` in stacks.json (`docker compose --env-file`) or a compose `env_file:`.
@@ -106,6 +106,13 @@ export RUNNER_ADMIN_PAT=ghp_...
 node ci/scripts/runners/register.mjs --from-list ci/runners.json --only r2pen2/devops
 sudo ~/actions-runner-devops/svc.sh install && sudo ~/actions-runner-devops/svc.sh start
 ```
+
+## glados-netwatch
+
+`host/glados/netwatch`: a systemd service that checks the router, the internet and DNS every 30 s and
+escalates while they stay down (reconfigure Wi-Fi → restart networkd → reload the driver → reboot after 20 min,
+at most every 6 h). Reports to the OpenTelemetry Collector (r2pen2/observability) as `glados_network_*` and
+`glados_netwatch_*` metrics and a log per action; also `journalctl -t glados-netwatch`.
 
 ## On glados
 

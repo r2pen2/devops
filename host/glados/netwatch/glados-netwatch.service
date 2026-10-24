@@ -1,0 +1,12 @@
+# Installed by r2pen2/devops (stacks.json "netwatch") to /etc/systemd/system/glados-netwatch.service.
+[Unit]
+Description=glados-netwatch: recover glados's network connection (see /usr/local/sbin/glados-netwatch)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/sbin/glados-netwatch
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
