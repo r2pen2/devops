@@ -10,13 +10,13 @@ ci/                 shared build/deploy for every app repo (was r2pen2/deploy-in
   runners.json        which repos get a glados runner
 stacks.json         the platform stacks below → glados
 host/glados/        cloudflared (tunnel + autoheal), coredns (LAN DNS overrides), netwatch (network watchdog)
-ingress/            traefik (incl. the sso@file middleware), oauth2-proxy + sso-bounce
+ingress/            traefik (the sign-in it routes through, oauth2-proxy + sso@file, is r2pen2/it)
 updates/            watchtower
 ```
 
 Push to main → **Deploy stacks** installs whatever changed (backup first, health + SSO check after, restore on
 failure). Only files in this repo are written: `traefik/dynamic/billing-blocks.yml` belongs to WL-Universe's
-site-billing, which rewrites it at runtime. Run it from Actions with *dry run* to see the diff against glados.
+site-billing, which rewrites it at runtime, and `sso.yml` belongs to r2pen2/it. Run it from Actions with *dry run* to see the diff against glados.
 
 Observability (OpenTelemetry Collector, Grafana, Honeycomb, Dozzle, Umami) is r2pen2/observability, deployed
 with the same deployer through `reusable-stacks.yml`. Apps, upstream images included, have their own repos (e.g. r2pen2/bindarr) and deploy through `ci/`.

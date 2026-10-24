@@ -1,5 +1,5 @@
 {
-  "$comment": "Platform stacks on glados (observability ones live in r2pen2/observability). Each folder is installed file by file into `dest` (files that aren't in the repo are left alone, e.g. traefik/dynamic/billing-blocks.yml, which WL-Universe's site-billing writes). `envFile` is passed to docker compose --env-file. `restart`: containers restarted when a mounted (non-compose) file changes; omit for configs the service watches itself. kind \"systemd\": host files installed to absolute paths, then the units are enabled and restarted.",
+  "$comment": "Platform stacks on glados (observability ones live in r2pen2/observability; the sign-in, oauth2-proxy + traefik/dynamic/sso.yml, in r2pen2/it). Each folder is installed file by file into `dest` (files that aren't in the repo are left alone, e.g. traefik/dynamic/billing-blocks.yml, which WL-Universe's site-billing writes). `envFile` is passed to docker compose --env-file. `restart`: containers restarted when a mounted (non-compose) file changes; omit for configs the service watches itself. kind \"systemd\": host files installed to absolute paths, then the units are enabled and restarted.",
   "stacks": {
     "cloudflared": {
       "src": "host/glados/cloudflared",
@@ -16,13 +16,6 @@
     "traefik": {
       "src": "ingress/traefik",
       "dest": "/opt/services/infra/traefik"
-    },
-    "oauth2-proxy": {
-      "src": "ingress/oauth2-proxy",
-      "dest": "/opt/services/infra/oauth2-proxy",
-      "restart": [
-        "sso-bounce"
-      ]
     },
     "watchtower": {
       "src": "updates/watchtower",
