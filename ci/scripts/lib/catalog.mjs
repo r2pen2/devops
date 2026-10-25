@@ -11,6 +11,7 @@
  *       "port": 80,
  *       "kind": "static",               // static | spa | express | api | infra
  *       "dockerfile": "deploy/docker/Dockerfile",
+ *       "context": "app",               // optional build context (default: repo root)
  *       "compose": "deploy/compose/web.yml",
  *       "serviceDir": "nutrifit",       // /opt/services/apps/<serviceDir>
  *       "image": true,                  // false = compose-only (mongo, etc.)
@@ -65,6 +66,7 @@ function normalizeApp(a, imagePrefix) {
     port: a.port ?? 80,
     kind: a.kind || (image ? "static" : "infra"),
     dockerfile: a.dockerfile || null,
+    context: a.context || ".",
     compose: a.compose || `deploy/compose/${a.app}.yml`,
     serviceDir: a.serviceDir || a.app,
     image,
