@@ -109,7 +109,7 @@ function buildOne(catalog, entry, args) {
 
   if (preferPlainDocker()) {
     runDocker(
-      ["build", "--file", entry.dockerfile, ...bargs, ...tags.flatMap((t) => ["--tag", t]), "."],
+      ["build", "--file", entry.dockerfile, ...bargs, ...tags.flatMap((t) => ["--tag", t]), entry.context],
       args.cwd,
     );
     if (args.push) {
@@ -129,7 +129,7 @@ function buildOne(catalog, entry, args) {
       "--cache-to",
       `type=gha,mode=max,scope=${cacheScope}`,
       args.push ? "--push" : "--load",
-      ".",
+      entry.context,
     ];
     runDocker(cmd, args.cwd);
   }
