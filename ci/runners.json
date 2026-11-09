@@ -54,6 +54,11 @@
       "repo": "r2pen2/observability",
       "name": "glados-observability",
       "dir": "actions-runner-observability"
+    },
+    {
+      "repo": "r2pen2/pm",
+      "name": "glados-pm",
+      "dir": "actions-runner-pm"
     }
   ]
 }
