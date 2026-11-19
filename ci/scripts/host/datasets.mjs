@@ -4,7 +4,7 @@
  * Every copy runs ON the target host and pulls from the source over SSH, so it works from any controller.
  * Databases are copied logically inside their running containers (never by copying a live database's files).
  */
-import { SERVICES, SNAPSHOTS, run, sshCmd } from "./lib.mjs";
+import { SERVICES, SNAPSHOTS, run, sshCmd, sshTarget } from "./lib.mjs";
 
 const abs = (ds) => `${SERVICES}/${ds.path}`;
 
@@ -101,7 +101,7 @@ ${PG_RESTORE} < "$TMP"`);
     run(to, `STOPPED=$(${containersMounting(dir)} | tr '\\n' ' ')
 [ -n "$STOPPED" ] && sudo docker stop $STOPPED >/dev/null
 sudo mkdir -p '${dir}'
-sudo rsync -aH --numeric-ids --delete -e "sudo -u $(id -un) ${src.replace(/ \S+$/, "")}" --rsync-path="sudo rsync" '${from.user}@${from.tailscale || from.name}:${dir}/' '${dir}/'
+sudo rsync -aH --numeric-ids --delete -e "sudo -u $(id -un) ${src.replace(/ \S+$/, "")}" --rsync-path="sudo rsync" '${sshTarget(from)}:${dir}/' '${dir}/'
 [ -n "$STOPPED" ] && sudo docker start $STOPPED >/dev/null
 true`);
   } finally {

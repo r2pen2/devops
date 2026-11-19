@@ -10,7 +10,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { measure } from "./datasets.mjs";
-import { PROD_LABEL, datasets, hosts, loadJson, log, parseArgs, run, runOk, step } from "./lib.mjs";
+import { PROD_LABEL, datasets, hosts, loadJson, log, parseArgs, run, runOk, sshTarget, step } from "./lib.mjs";
 
 const args = parseArgs(process.argv.slice(2), { runners: "bool", data: "bool" });
 const all = hosts();
@@ -20,7 +20,7 @@ let active = [];
 step("hosts");
 for (const h of all) {
   if (!up.includes(h)) {
-    log(`${h.name}: UNREACHABLE (${h.user}@${h.tailscale || h.name})`);
+    log(`${h.name}: UNREACHABLE (${sshTarget(h)})`);
     continue;
   }
   const info = run(h, `tunnel=$( [ "$(sudo docker inspect -f '{{.State.Running}}' cloudflared 2>/dev/null)" = true ] && echo yes || echo no )

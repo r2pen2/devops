@@ -46,7 +46,8 @@ export function isLocal(h) {
   return me === h.name.toLowerCase() || me === (h.tailscale || "").toLowerCase();
 }
 
-export const sshTarget = (h) => `${h.user}@${h.tailscale || h.name}`;
+/** How to reach a host: `address` (e.g. a LAN IP while it isn't on the tailnet yet), else its Tailscale name. */
+export const sshTarget = (h) => `${h.user}@${h.address || h.tailscale || h.name}`;
 const SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=accept-new"];
 /** The ssh command line, as a string, for scripts that run ON one host and reach ANOTHER. */
 export const sshCmd = (h) => `ssh ${SSH_OPTS.join(" ")} ${sshTarget(h)}`;

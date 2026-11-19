@@ -6,6 +6,8 @@
  *   node ci/scripts/host/promote.mjs bouldergeist            # shows the plan, changes nothing
  *   node ci/scripts/host/promote.mjs bouldergeist --yes      # does it
  *   node ci/scripts/host/promote.mjs bouldergeist --yes --no-sync   # old host is dead: go with the last sync
+ *   node ci/scripts/host/promote.mjs bouldergeist --yes --skip-runners   # move traffic only; CI keeps deploying
+ *     to the old host (e.g. the new one has no runners yet, or gh isn't signed in where this runs)
  *
  * Order: stop the tunnel and crons on the old host (no more writes there), final sync to the new host (files and
  * databases), crons + tunnel on the new host, move the runner label, health checks. If the new host fails the
@@ -95,7 +97,7 @@ function healthy(h) {
   return ok;
 }
 
-const args = parseArgs(process.argv.slice(2), { yes: "bool", noSync: "bool", dryRun: "bool" });
+const args = parseArgs(process.argv.slice(2), { yes: "bool", noSync: "bool", dryRun: "bool", skipRunners: "bool" });
 const target = args._[0] && host(args._[0]);
 if (!target) {
   console.error("Usage: promote.mjs <host> [--yes] [--no-sync]   (without --yes it only shows the plan)");
@@ -126,8 +128,11 @@ try {
   log(`1. ${current ? `${current.name}: stop the tunnel and park the crons (public sites are down until step 3)` : "no active host to stop"}`);
   log(`2. ${current && !args.noSync ? `final sync ${current.name} → ${target.name} (files + databases)` : "no sync: the new host serves what it already has"}`);
   log(`3. ${target.name}: install crons, start the tunnel`);
-  log(`4. move the "${PROD_LABEL}" runner label to ${target.name}'s runners:`);
-  moveRunnerLabel(current?.name || "glados", target, { dryRun: true });
+  if (args.skipRunners) log(`4. runner label stays where it is (--skip-runners): deploy jobs keep going to the old host`);
+  else {
+    log(`4. move the "${PROD_LABEL}" runner label to ${target.name}'s runners:`);
+    moveRunnerLabel(current?.name || "glados", target, { dryRun: true });
+  }
   log("5. health checks; on failure, hand everything back");
   if (dryRun) process.exit(0);
 
@@ -142,8 +147,10 @@ try {
     if (current) startTunnelAndCrons(current);
     process.exit(1);
   }
-  step("runner label");
-  moveRunnerLabel(current?.name || "glados", target, { dryRun: false });
+  if (!args.skipRunners) {
+    step("runner label");
+    moveRunnerLabel(current?.name || "glados", target, { dryRun: false });
+  }
   for (const h of others) if (runOk(h, "true") && runsTunnel(h)) throw new Error(`${h.name} still runs the tunnel`);
   step(`${target.name} is active`);
 } catch (err) {
