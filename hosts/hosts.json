@@ -1,0 +1,29 @@
+{
+  "$comment": "Machines that can run the joed.dev stack. Each is a Linux environment with Docker (native, WSL2 or a Mac VM) on the Tailscale network, reached as `user@tailscale` over Tailscale SSH. `skip`: compose projects this host must not run (hardware it doesn't have: Bluetooth, PulseAudio, the LAN DNS IP). `skipRepos`: repos whose deploy jobs stay on the other host when this one is promoted (they drive that hardware). `publicChecks`: URLs that must return 200 after a promote. Which host is ACTIVE isn't stored here: it's whichever runs the cloudflared container (see ci/scripts/host/status.mjs). Add a host with the `hosts` skill or docs/hosts.md.",
+  "publicChecks": [
+    "https://joed.dev/",
+    "https://youcandoitgardening.com/",
+    "https://wl-cms.joed.dev/liveness",
+    "https://wl-auth.joed.dev/liveness",
+    "https://billing.joed.dev/liveness"
+  ],
+  "hosts": [
+    {
+      "name": "glados",
+      "os": "linux",
+      "user": "joe",
+      "tailscale": "glados",
+      "skip": [],
+      "notes": "2014 MacBook Pro, 4 threads, 7 GiB, Wi-Fi. Owns the Bluetooth speaker (LEXON MINO) and the LAN DNS (coredns on 10.0.0.172)."
+    },
+    {
+      "name": "bouldergeist",
+      "os": "windows-wsl",
+      "user": "joe",
+      "tailscale": "bouldergeist",
+      "skip": ["home-assistant", "speaker", "music", "coredns"],
+      "skipRepos": ["r2pen2/home-assistant", "r2pen2/speaker"],
+      "notes": "Windows 11 PC on the home LAN. The stack runs in a WSL2 Ubuntu distro with systemd and Docker Engine (not Docker Desktop); see host/windows/setup.ps1."
+    }
+  ]
+}

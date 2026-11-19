@@ -1,0 +1,43 @@
+{
+  "$comment": "Stateful data on a host, for ci/scripts/host/data-copy.mjs (overwrite one host's copy with another's) and data-restore.mjs. Types: `mongo` and `postgres` are copied with a logical dump/restore inside the running container (Postgres uses the container's own $POSTGRES_USER/$POSTGRES_DB); `files` stops every container that mounts the path on both hosts, mirrors it with rsync --delete, and starts them again. `sync.mjs` copies raw files for everything else but leaves the database directories listed in `rawDirs` alone (copying a live database's files corrupts it); it copies the mongo/postgres datasets logically instead.",
+  "rawDirs": [
+    "data/app-assets/citrus-mongo",
+    "data/app-assets/catchat-mongo",
+    "data/app-assets/speaker-mongo",
+    "data/app-assets/umami/db",
+    "data/app-assets/plane/pgdata",
+    "data/app-assets/plane/redisdata",
+    "data/app-assets/plane/rabbitmq",
+    "data/app-assets/plane/logs"
+  ],
+  "datasets": [
+    { "name": "citrus-mongo", "type": "mongo", "container": "citrus-mongo" },
+    { "name": "catchat-mongo", "type": "mongo", "container": "catchat-mongo" },
+    { "name": "speaker-mongo", "type": "mongo", "container": "speaker-mongo" },
+    { "name": "umami-db", "type": "postgres", "container": "umami-db" },
+    { "name": "plane-db", "type": "postgres", "container": "plane-db" },
+    { "name": "plane-minio", "type": "files", "path": "data/app-assets/plane/minio" },
+    { "name": "plane-data", "type": "files", "path": "data/app-assets/plane/data" },
+    { "name": "wl-cms", "type": "files", "path": "data/app-assets/wl-cms" },
+    { "name": "site-billing", "type": "files", "path": "data/app-assets/site-billing" },
+    { "name": "site-mail", "type": "files", "path": "data/app-assets/site-mail" },
+    { "name": "bindarr", "type": "files", "path": "data/app-assets/bindarr" },
+    { "name": "access", "type": "files", "path": "data/app-assets/access" },
+    { "name": "oauth2-proxy", "type": "files", "path": "data/app-assets/oauth2-proxy" },
+    { "name": "home-assistant", "type": "files", "path": "data/app-assets/home-assistant" },
+    { "name": "grafana", "type": "files", "path": "data/app-assets/grafana" },
+    { "name": "ambient-music", "type": "files", "path": "data/app-assets/ambient-music" },
+    { "name": "nutritrace", "type": "files", "path": "data/app-assets/nutritrace" },
+    { "name": "ovumcy", "type": "files", "path": "data/app-assets/ovumcy" },
+    { "name": "storybook", "type": "files", "path": "data/app-assets/storybook" },
+    { "name": "a-new-day-coaching", "type": "files", "path": "data/app-assets/a-new-day-coaching" },
+    { "name": "a-new-day-coaching-crm", "type": "files", "path": "data/app-assets/a-new-day-coaching-crm" },
+    { "name": "beyond-the-bell", "type": "files", "path": "data/app-assets/beyond-the-bell" },
+    { "name": "boston-mixtape", "type": "files", "path": "data/app-assets/boston-mixtape" },
+    { "name": "joe-dobbelaar", "type": "files", "path": "data/app-assets/joe-dobbelaar" },
+    { "name": "nicole-levin", "type": "files", "path": "data/app-assets/nicole-levin" },
+    { "name": "talk-about-dreams", "type": "files", "path": "data/app-assets/talk-about-dreams" },
+    { "name": "wl-admin-portal", "type": "files", "path": "data/app-assets/wl-admin-portal" },
+    { "name": "you-can-do-it-gardening", "type": "files", "path": "data/app-assets/you-can-do-it-gardening" }
+  ]
+}

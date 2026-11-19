@@ -1,0 +1,70 @@
+# Copy data between hosts: overwrite datasets on one host with another host's copy.
+#
+# For when the hosts' data diverged and you've decided which side wins. Start with the default dry run: its job
+# summary shows each dataset on both hosts (counts, size, newest change). Then run again with dry_run off.
+# Every overwrite snapshots the target first; undo with ci/scripts/host/data-restore.mjs.
+#
+# Runs on the TARGET host's devops runner (label host-<to>) and pulls from the source over Tailscale SSH.
+# Datasets: hosts/datasets.json. Script: ci/scripts/host/data-copy.mjs.
+
+name: Copy data between hosts
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Copy FROM this host (its data wins)"
+        required: true
+        type: choice
+        options: [glados, bouldergeist]
+      to:
+        description: "Overwrite THIS host's data"
+        required: true
+        type: choice
+        options: [bouldergeist, glados]
+      only:
+        description: "Datasets, comma-separated (blank = all). See hosts/datasets.json"
+        required: false
+        default: ""
+      dry_run:
+        description: "Only compare, change nothing"
+        required: true
+        default: true
+        type: boolean
+      overwrite_active:
+        description: "Allow overwriting the ACTIVE host (the one serving traffic)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-copy
+  cancel-in-progress: false
+
+jobs:
+  copy:
+    name: ${{ inputs.dry_run && 'compare' || 'copy' }} ${{ inputs.from }} → ${{ inputs.to }}
+    runs-on: [self-hosted, "host-${{ inputs.to }}"]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy data
+        env:
+          HOST_NAME: ${{ inputs.to }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          ONLY: ${{ inputs.only }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          OVERWRITE_ACTIVE: ${{ inputs.overwrite_active }}
+        run: |
+          set -euo pipefail
+          if [ "$FROM" = "$TO" ]; then echo "::error::from and to are the same host"; exit 1; fi
+          args=(--from "$FROM" --to "$TO")
+          [ -n "$ONLY" ] && args+=(--only "$ONLY")
+          [ "$DRY_RUN" = true ] && args+=(--dry-run)
+          [ "$OVERWRITE_ACTIVE" = true ] && args+=(--overwrite-active)
+          node ci/scripts/host/data-copy.mjs "${args[@]}"

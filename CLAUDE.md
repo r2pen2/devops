@@ -17,3 +17,6 @@ Traefik; they own the gate in it.
 - Changes to live infra (Traefik, oauth2-proxy, cloudflared) back up what they replace under
   `/opt/services/infra/backups/`, check the result, and restore on failure. See r2pen2/access's `sso` job for the pattern.
 - glados is a 2014 MacBook Pro with 7 GiB RAM. Check `host/glados` capacity before adding a stack.
+- The stack can run on more than one host (`hosts/hosts.json`). Only the active host runs `cloudflared`; never start
+  it anywhere by hand. Moving, adding or failing over hosts: the `hosts` skill (`.claude/skills/hosts`). A new app
+  with state needs an entry in `hosts/datasets.json`.
