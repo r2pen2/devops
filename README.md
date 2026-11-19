@@ -7,9 +7,12 @@ Apps live in their own repos; this repo runs them.
 ci/                 shared build/deploy for every app repo (was r2pen2/deploy-infra-actions)
   actions/            composite actions: build-push, deploy-prod, detect-changed, qa-deploy, qa-cleanup, tooling
   scripts/            what the actions run, plus deploy-stacks.mjs (shared: reusable-stacks.yml)
+  scripts/host/       move the stack between hosts: status, sync, promote, data-copy (docs/hosts.md)
   runners.json        which repos get a glados runner
+hosts/              the machines that can run the stack, and their stateful data
 stacks.json         the platform stacks below → glados
 host/glados/        cloudflared (tunnel + autoheal), coredns (LAN DNS overrides), netwatch (network watchdog)
+host/windows/       setup.ps1: prepare a Windows PC to host the stack in WSL2
 ingress/            traefik (the sign-in it routes through, oauth2-proxy + sso@file, is r2pen2/it)
 updates/            watchtower
 ```
@@ -106,6 +109,14 @@ export RUNNER_ADMIN_PAT=ghp_...
 node ci/scripts/runners/register.mjs --from-list ci/runners.json --only r2pen2/devops
 sudo ~/actions-runner-devops/svc.sh install && sudo ~/actions-runner-devops/svc.sh start
 ```
+
+## Hosts
+
+glados isn't the only machine that can run the stack. [`hosts/hosts.json`](hosts/hosts.json) lists the hosts; the
+**active** one runs the Cloudflare tunnel, the crons and the production CI jobs, and standbys run everything else
+with a copy of the data. `promote.mjs <host>` moves traffic, crons and the `glados` runner label in one step;
+`data-copy.mjs` overwrites one host's data with another's when they diverge (also **Actions → Copy data between
+hosts**). Details: [docs/hosts.md](docs/hosts.md); step by step for Claude: [`.claude/skills/hosts`](.claude/skills/hosts/SKILL.md).
 
 ## glados-netwatch
 

@@ -10,6 +10,11 @@
  *   node ci/scripts/runners/register.mjs --from-list ci/runners.json
  *   node ci/scripts/runners/register.mjs --from-list ci/runners.json --only r2pen2/nutrifit,r2pen2/citrus
  *   node ci/scripts/runners/register.mjs --from-list ci/runners.json --dry-run
+ *   node ci/scripts/runners/register.mjs --from-list ci/runners.json --host bouldergeist
+ *
+ * --host <name> registers this machine as another host (hosts/hosts.json): runners are named
+ * `<name>-<repo>` and labelled `self-hosted,host-<name>` only, so they take no production jobs until
+ * ci/scripts/host/promote.mjs moves the `glados` label to them. Without --host: the glados runners, as before.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -29,6 +34,7 @@ function parseArgs(argv) {
     dryRun: false,
     force: false,
     home: process.env.HOME || os.homedir(),
+    host: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -42,6 +48,7 @@ function parseArgs(argv) {
     else if (a === "--dry-run") args.dryRun = true;
     else if (a === "--force") args.force = true;
     else if (a === "--home" && argv[i + 1]) args.home = argv[++i];
+    else if (a === "--host" && argv[i + 1]) args.host = argv[++i];
   }
   if (!args.list && !args.repo) {
     throw new Error("Provide --from-list ci/runners.json and/or --repo owner/name");
@@ -250,6 +257,16 @@ function registerOne(entry, { dryRun, force, home }) {
   return { repo: entry.repo, action: "registered", dir: runnerDir };
 }
 
+/** The same runner, for another host: its own name and only a `host-<name>` label (no production label). */
+function forHost(entry, host) {
+  if (!host || host === "glados") return entry;
+  return {
+    ...entry,
+    name: entry.name === "glados" ? host : entry.name.replace(/^glados(?=-)/, host),
+    labels: ["self-hosted", `host-${host}`],
+  };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   let entries = [];
@@ -266,6 +283,8 @@ function main() {
       : null;
     entries = [fromList || entryForRepo(args.repo)];
   }
+
+  entries = entries.map((e) => forHost(e, args.host));
 
   if (!entries.length) {
     console.log("No runner entries to process.");
