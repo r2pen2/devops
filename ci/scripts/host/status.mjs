@@ -25,7 +25,7 @@ for (const h of all) {
   }
   const info = run(h, `tunnel=$( [ "$(sudo docker inspect -f '{{.State.Running}}' cloudflared 2>/dev/null)" = true ] && echo yes || echo no )
 running=$(sudo docker ps -q | wc -l); stopped=$(sudo docker ps -aq -f status=exited | wc -l)
-crons=$(ls /etc/cron.d/wl-* 2>/dev/null | xargs -r -n1 basename | tr '\\n' ' ')
+crons=$( (ls /etc/cron.d/wl-* 2>/dev/null || true) | xargs -r -n1 basename | tr '\\n' ' ')
 power=""
 for b in /sys/class/power_supply/BAT*; do [ -e "$b" ] && power="battery $(cat $b/capacity)% $(cat $b/status)"; done
 echo "$tunnel|$running|$stopped|\${crons:-none}|\${power:-mains}|$(cut -d' ' -f1-3 /proc/loadavg)|$(free -m | awk '/Mem:/ { print $3 "/" $2 " MB" }')"`, { quiet: true });
