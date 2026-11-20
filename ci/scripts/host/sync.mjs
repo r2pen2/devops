@@ -19,7 +19,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { copy as copyDataset } from "./datasets.mjs";
-import { HOST_STATE, SERVICES, datasets, guardTarget, host, loadJson, log, parseArgs, run, runOk, sshCmd, step } from "./lib.mjs";
+import { HOST_STATE, SERVICES, datasets, guardTarget, host, loadJson, log, parseArgs, run, runOk, sshCmd, sshTarget, step } from "./lib.mjs";
 
 /** Never mirrored: per-PR previews, backups, archives, and fast-changing telemetry. Paths relative to /opt/services. */
 const EXCLUDES = [
@@ -63,7 +63,7 @@ function mirrorFiles(from, to, { dryRun }) {
   const raw = loadJson("hosts/datasets.json").rawDirs.map((d) => `/${d}/`);
   const excludes = [...EXCLUDES, ...raw].map((e) => `--exclude='${e}'`).join(" ");
   const ssh = sshCmd(from);
-  const remote = `${from.user}@${from.tailscale || from.name}`;
+  const remote = `${sshTarget(from)}`;
   const rsync = `sudo rsync -aH --numeric-ids --delete ${dryRun ? "--dry-run --stats" : "--stats"} -e "sudo -u $(id -un) ${ssh.replace(/ \S+$/, "")}" --rsync-path="sudo rsync"`;
   const out = run(to, `sudo mkdir -p ${SERVICES} ${HOST_STATE}/cron /root/.docker
 ${rsync} ${excludes} '${remote}:${SERVICES}/' '${SERVICES}/' | grep -E 'Number of (regular )?files transferred|Total transferred file size|Number of deleted files' || true
@@ -122,7 +122,7 @@ export function copyDatabases(from, to) {
 
 export function syncHosts(from, to, { dryRun = false, overwriteActive = false, skipData = false } = {}) {
   if (from.name === to.name) throw new Error("--from and --to are the same host");
-  for (const h of [from, to]) if (!runOk(h, "true")) throw new Error(`Can't reach ${h.name} (${h.user}@${h.tailscale || h.name}) over SSH`);
+  for (const h of [from, to]) if (!runOk(h, "true")) throw new Error(`Can't reach ${h.name} (${sshTarget(h)}) over SSH`);
   guardTarget(to, { overwriteActive });
   ensureBasics(to);
   mirrorFiles(from, to, { dryRun });
