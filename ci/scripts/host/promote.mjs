@@ -81,10 +81,10 @@ function moveRunnerLabel(fromName, to, { dryRun }) {
 
 function healthy(h) {
   step(`${h.name}: health checks`);
-  const checks = loadJson("hosts/hosts.json").publicChecks || [];
-  const gate = run(h, `curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: radio.joed.dev' http://127.0.0.1/ || true`, { quiet: true });
+  const { publicChecks: checks = [], gateHost = "grafana.joed.dev" } = loadJson("hosts/hosts.json");
+  const gate = run(h, `curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: ${gateHost}' http://127.0.0.1/ || true`, { quiet: true });
   let ok = gate.startsWith("302 https://auth.joed.dev/oauth2/start");
-  log(`  local Traefik + sign-in gate: ${ok ? "ok" : `FAIL (${gate})`}`);
+  log(`  local Traefik + sign-in gate (${gateHost}): ${ok ? "ok" : `FAIL (${gate})`}`);
   for (const url of checks) {
     let code = "";
     for (let i = 0; i < 10 && code !== "200"; i++) {
