@@ -31,7 +31,8 @@ const TUNNEL_ENV = "/opt/services/data/app-env/cloudflared.env";
 function stopTunnelAndCrons(h) {
   run(h, `sudo docker stop cloudflared-autoheal cloudflared >/dev/null 2>&1 || true
 sudo mkdir -p ${HOST_STATE}/cron
-for f in /etc/cron.d/wl-*; do [ -e "$f" ] && sudo mv "$f" ${HOST_STATE}/cron/; done; true`);
+for f in /etc/cron.d/wl-*; do [ -e "$f" ] && sudo mv "$f" ${HOST_STATE}/cron/; done
+sudo rm -f ${HOST_STATE}/active-since; true`);
   log(`${h.name}: tunnel stopped, crons parked in ${HOST_STATE}/cron`);
 }
 
@@ -43,6 +44,8 @@ for i in $(seq 1 60); do
   sleep 2
 done
 echo "cloudflared did not connect" >&2; exit 1`);
+  // When two hosts run the tunnel, the watchdog keeps the one that became active later (watchdog.sh).
+  run(h, `date +%s | sudo tee ${HOST_STATE}/active-since >/dev/null`, { quiet: true });
   log(`${h.name}: tunnel connected`);
 }
 
@@ -171,6 +174,15 @@ try {
   }
   log("5. public health checks");
   if (dryRun) process.exit(0);
+
+  // A handover looks like an outage (two tunnels, then none for a moment): keep the watchdogs out of it.
+  const all = [target, ...others].filter((h) => runOk(h, "true"));
+  const pauseWatchdogs = (minutes) =>
+    all.forEach((h) => run(h, minutes
+      ? `echo $(( $(date +%s) + ${minutes * 60} )) | sudo tee ${HOST_STATE}/watchdog.pause-until >/dev/null`
+      : `sudo rm -f ${HOST_STATE}/watchdog.pause-until`, { quiet: true, allowFail: true }));
+  pauseWatchdogs(args.noSync ? 15 : 90);
+  process.on("exit", () => pauseWatchdogs(0));
 
   if (args.cleanCut || !current) {
     if (current) stopTunnelAndCrons(current);

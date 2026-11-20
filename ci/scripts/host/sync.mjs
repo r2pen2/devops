@@ -181,7 +181,11 @@ export function syncHosts(from, to, { dryRun = false, overwriteActive = false, s
   prepareSkippedDirs(from, to);
   startProjects(from, to, projects);
   copyVolumes(from, to, projects);
-  if (!skipData) copyDatabases(from, to);
+  if (!skipData) {
+    copyDatabases(from, to);
+    // The watchdog's takeover email says how old the data it serves is.
+    run(to, `date '+%Y-%m-%d %H:%M %Z' | sudo tee ${HOST_STATE}/last-sync >/dev/null`, { quiet: true });
+  }
   if (!skipRunners) {
     if (canRegisterRunners()) registerRunners(to);
     else log(`
