@@ -8,10 +8,16 @@
  *   node ci/scripts/host/promote.mjs bouldergeist --yes --no-sync   # old host is dead: go with the last sync
  *   node ci/scripts/host/promote.mjs bouldergeist --yes --skip-runners   # move traffic only; CI keeps deploying
  *     to the old host (e.g. the new one has no runners yet, or gh isn't signed in where this runs)
+ *   node ci/scripts/host/promote.mjs bouldergeist --yes --clean-cut   # stop the old host first (see below)
  *
- * Order: stop the tunnel and crons on the old host (no more writes there), final sync to the new host (files and
- * databases), crons + tunnel on the new host, move the runner label, health checks. If the new host fails the
- * checks, the tunnel and crons go back to the old host.
+ * Default, no downtime (make before break): final sync while the old host keeps serving, start the tunnel on the new
+ * host, wait until it's connected and its local sign-in check passes, THEN stop the old host's tunnel and move the
+ * crons, check the public sites, move the runner label. For the minute both tunnels run, Cloudflare sends requests
+ * to either host, so writes in that window can land on the old host and not come along (accepted: no downtime
+ * matters more). If the new host isn't healthy, its tunnel is stopped again and the old host never stopped.
+ *
+ * --clean-cut: stop the old host's tunnel first, then final sync and start the new one. No write is lost, but the
+ * sites are down for the few minutes in between. On failure, the tunnel goes back to the old host.
  *
  * Needs SSH to both hosts and `gh` signed in as someone who administers the repos in ci/runners.json.
  */
@@ -29,12 +35,34 @@ for f in /etc/cron.d/wl-*; do [ -e "$f" ] && sudo mv "$f" ${HOST_STATE}/cron/; d
   log(`${h.name}: tunnel stopped, crons parked in ${HOST_STATE}/cron`);
 }
 
+/** Starts the tunnel and waits until it's healthy with connections registered at Cloudflare's edge. */
+function startTunnel(h) {
+  run(h, `cd ${TUNNEL} && sudo docker compose -p cloudflared -f compose.yml --env-file ${TUNNEL_ENV} up -d --quiet-pull 2>&1 | tail -1
+for i in $(seq 1 60); do
+  if [ "$(sudo docker inspect -f '{{.State.Health.Status}}' cloudflared 2>/dev/null)" = healthy ] && [ "$(sudo docker logs cloudflared 2>&1 | grep -c 'Registered tunnel connection')" -ge 2 ]; then exit 0; fi
+  sleep 2
+done
+echo "cloudflared did not connect" >&2; exit 1`);
+  log(`${h.name}: tunnel connected`);
+}
+
+function installCrons(h) {
+  run(h, `for f in ${HOST_STATE}/cron/wl-*; do [ -e "$f" ] && sudo install -m 644 "$f" /etc/cron.d/; done; true`);
+  log(`${h.name}: crons installed`);
+}
+
 function startTunnelAndCrons(h) {
-  run(h, `for f in ${HOST_STATE}/cron/wl-*; do [ -e "$f" ] && sudo install -m 644 "$f" /etc/cron.d/; done
-cd ${TUNNEL} && sudo docker compose -p cloudflared -f compose.yml --env-file ${TUNNEL_ENV} up -d --quiet-pull 2>&1 | tail -1
-for i in $(seq 1 45); do [ "$(sudo docker inspect -f '{{.State.Health.Status}}' cloudflared 2>/dev/null)" = healthy ] && exit 0; sleep 2; done
-echo "cloudflared did not become healthy" >&2; exit 1`);
-  log(`${h.name}: crons installed, tunnel connected`);
+  installCrons(h);
+  startTunnel(h);
+}
+
+/** The new host's own check, before it takes all the traffic: Traefik serves and the sign-in gate redirects. */
+function locallyHealthy(h) {
+  const { gateHost = "grafana.joed.dev" } = loadJson("hosts/hosts.json");
+  const gate = run(h, `curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: ${gateHost}' http://127.0.0.1/ || true`, { quiet: true });
+  const ok = gate.startsWith("302 https://auth.joed.dev/oauth2/start");
+  log(`  ${h.name}: local Traefik + sign-in gate (${gateHost}): ${ok ? "ok" : `FAIL (${gate})`}`);
+  return ok;
 }
 
 function gh(args) {
@@ -81,10 +109,8 @@ function moveRunnerLabel(fromName, to, { dryRun }) {
 
 function healthy(h) {
   step(`${h.name}: health checks`);
-  const { publicChecks: checks = [], gateHost = "grafana.joed.dev" } = loadJson("hosts/hosts.json");
-  const gate = run(h, `curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: ${gateHost}' http://127.0.0.1/ || true`, { quiet: true });
-  let ok = gate.startsWith("302 https://auth.joed.dev/oauth2/start");
-  log(`  local Traefik + sign-in gate (${gateHost}): ${ok ? "ok" : `FAIL (${gate})`}`);
+  const { publicChecks: checks = [] } = loadJson("hosts/hosts.json");
+  let ok = locallyHealthy(h);
   for (const url of checks) {
     let code = "";
     for (let i = 0; i < 10 && code !== "200"; i++) {
@@ -97,10 +123,10 @@ function healthy(h) {
   return ok;
 }
 
-const args = parseArgs(process.argv.slice(2), { yes: "bool", noSync: "bool", dryRun: "bool", skipRunners: "bool" });
+const args = parseArgs(process.argv.slice(2), { yes: "bool", noSync: "bool", dryRun: "bool", skipRunners: "bool", cleanCut: "bool" });
 const target = args._[0] && host(args._[0]);
 if (!target) {
-  console.error("Usage: promote.mjs <host> [--yes] [--no-sync]   (without --yes it only shows the plan)");
+  console.error("Usage: promote.mjs <host> [--yes] [--no-sync] [--clean-cut] [--skip-runners]   (without --yes it only shows the plan)");
   process.exit(2);
 }
 const dryRun = !args.yes || args.dryRun;
@@ -125,27 +151,58 @@ try {
   const current = otherTunnels[0] || null;
   log(`active now: ${current ? current.name : "none reachable"}`);
 
-  log(`1. ${current ? `${current.name}: stop the tunnel and park the crons (public sites are down until step 3)` : "no active host to stop"}`);
-  log(`2. ${current && !args.noSync ? `final sync ${current.name} → ${target.name} (files + databases)` : "no sync: the new host serves what it already has"}`);
-  log(`3. ${target.name}: install crons, start the tunnel`);
+  const sync = current && !args.noSync;
+  const plan = args.cleanCut || !current
+    ? [
+        current ? `${current.name}: stop the tunnel and park the crons (public sites are down until step 3)` : "no active host to stop",
+        sync ? `final sync ${current.name} → ${target.name} (files + databases)` : "no sync: the new host serves what it already has",
+        `${target.name}: install crons, start the tunnel`,
+      ]
+    : [
+        sync ? `final sync ${current.name} → ${target.name} while ${current.name} keeps serving` : "no sync: the new host serves what it already has",
+        `${target.name}: start the tunnel (both hosts serve for about a minute), wait until it's connected and healthy`,
+        `${current.name}: stop the tunnel, move the crons to ${target.name}. No downtime; if ${target.name} isn't healthy, it stops instead`,
+      ];
+  plan.forEach((line, i) => log(`${i + 1}. ${line}`));
   if (args.skipRunners) log(`4. runner label stays where it is (--skip-runners): deploy jobs keep going to the old host`);
   else {
     log(`4. move the "${PROD_LABEL}" runner label to ${target.name}'s runners:`);
     moveRunnerLabel(current?.name || "glados", target, { dryRun: true });
   }
-  log("5. health checks; on failure, hand everything back");
+  log("5. public health checks");
   if (dryRun) process.exit(0);
 
-  if (current) stopTunnelAndCrons(current);
-  try {
-    if (current && !args.noSync) syncHosts(current, target);
-    startTunnelAndCrons(target);
-    if (!healthy(target)) throw new Error("health checks failed");
-  } catch (err) {
-    console.error(`\n${err.message}; handing traffic back${current ? ` to ${current.name}` : ""}`);
-    stopTunnelAndCrons(target);
-    if (current) startTunnelAndCrons(current);
-    process.exit(1);
+  if (args.cleanCut || !current) {
+    if (current) stopTunnelAndCrons(current);
+    try {
+      if (sync) syncHosts(current, target, { skipRunners: true });
+      startTunnelAndCrons(target);
+      if (!healthy(target)) throw new Error("health checks failed");
+    } catch (err) {
+      console.error(`\n${err.message}; handing traffic back${current ? ` to ${current.name}` : ""}`);
+      stopTunnelAndCrons(target);
+      if (current) startTunnelAndCrons(current);
+      process.exit(1);
+    }
+  } else {
+    if (sync) syncHosts(current, target, { skipRunners: true });
+    step(`${target.name}: start the tunnel alongside ${current.name}'s`);
+    try {
+      startTunnel(target);
+      if (!locallyHealthy(target)) throw new Error(`${target.name} isn't healthy`);
+    } catch (err) {
+      console.error(`\n${err.message}; stopping ${target.name}'s tunnel. ${current.name} kept serving the whole time.`);
+      stopTunnelAndCrons(target);
+      process.exit(1);
+    }
+    step(`${current.name}: hand over`);
+    stopTunnelAndCrons(current);
+    installCrons(target);
+    if (!healthy(target)) {
+      console.error(`\npublic checks failed after the handover; starting ${current.name}'s tunnel again so both serve. Look into ${target.name}.`);
+      startTunnelAndCrons(current);
+      process.exit(1);
+    }
   }
   if (!args.skipRunners) {
     step("runner label");

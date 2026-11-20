@@ -22,8 +22,10 @@ tailnet). Run from a host itself, set `HOST_NAME=<its name>` so it runs its own 
 
 ## Rules
 
-- **Never two tunnels.** If two hosts run `cloudflared`, Cloudflare splits requests between them and the data
-  diverges. `promote` is the only thing that should start or stop the tunnel. `status` warns about it.
+- **Never two tunnels, except inside `promote`.** If two hosts run `cloudflared`, Cloudflare splits requests between
+  them and the data diverges. `promote` deliberately overlaps them for about a minute so the sites never go down
+  (Joe prefers a few lost writes to downtime); `--clean-cut` stops the old one first instead. Nothing else should
+  start or stop the tunnel. `status` warns when two run.
 - **Ask Joe before** `promote --yes`, `data-copy` without `--dry-run`, `data-restore`, or anything with
   `--overwrite-active`. Show him the plan or the dry run first. Read-only commands (`status`, dry runs) need no ask.
 - **Never print or copy secrets** into the conversation: `/opt/services/data/app-env/*` moves host to host via
@@ -58,9 +60,9 @@ node ci/scripts/host/status.mjs --data       # every dataset on every host, side
    `gh` signed in where it runs, which mints the tokens, so the host never holds one).
 2. Check the standby serves locally: `ssh joe@<standby> "curl -s -o /dev/null -w '%{http_code}' -H 'Host: youcandoitgardening.com' http://127.0.0.1/"` → 200.
 3. Make sure the standby has runners: `status --runners`, or `runners.mjs --host <standby>` if sync couldn't.
-4. `promote.mjs <standby>` shows the plan; with Joe's OK, `--yes`. Public sites are down for the few minutes
-   between stopping the old tunnel and starting the new one (the final sync happens in between).
-   On failed health checks it hands everything back automatically.
+4. `promote.mjs <standby>` shows the plan; with Joe's OK, `--yes`. No downtime: it syncs while the old host
+   serves, starts the new tunnel, checks the new host, and only then stops the old tunnel. If the new host isn't
+   healthy it backs out and the old host never stopped.
 5. `status.mjs --runners` to confirm.
 
 Moving back later is the same with the names swapped.
