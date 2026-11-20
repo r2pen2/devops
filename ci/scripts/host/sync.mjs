@@ -86,8 +86,11 @@ function ensureImages(from, to, p) {
   const images = run(to, `cd ${p.dir} && sudo docker compose ${composeArgs(p)} config --images`, { quiet: true }).split("\n").filter(Boolean);
   for (const img of images) {
     if (runOk(to, `sudo docker image inspect '${img}' >/dev/null 2>&1`)) continue;
-    if (runOk(to, `sudo docker pull -q '${img}' >/dev/null 2>&1`)) continue;
-    log(`  ${img}: not pullable, streaming it from ${from.name}`);
+    // Pull from the registry first (big images take minutes); stream from the source only for images no registry
+    // has, like local builds. Streaming goes over the source's network, which may be weak (glados is on Wi-Fi).
+    const pulled = run(to, `sudo docker pull -q '${img}' >/dev/null 2>&1 && echo ok || echo no`, { quiet: true, timeoutMs: 30 * 60 * 1000 });
+    if (pulled === "ok") continue;
+    log(`  ${img}: not in any registry this host can reach, streaming it from ${from.name}`);
     run(to, `${sshCmd(from)} "sudo docker save '${img}'" | sudo docker load -q`);
   }
 }
