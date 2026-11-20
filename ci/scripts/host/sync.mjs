@@ -13,12 +13,14 @@
  *   3. creates the shared docker networks, pulls every image (streaming ones that can't be pulled, like local
  *      builds, straight from the source), and starts every compose project the source runs, except the tunnel
  *      (only the active host runs cloudflared) and the projects the target's `skip` lists;
- *   4. copies the Mongo and Postgres databases logically (dump on the source, restore on the target).
+ *   4. copies the Mongo and Postgres databases logically (dump on the source, restore on the target);
+ *   5. registers the target's CI runners (runners.mjs), if `gh` is signed in where this runs (--skip-runners: don't).
  *
  * Refuses to write over the ACTIVE host (the one running cloudflared). Env files go host to host over SSH only.
  */
 import { pathToFileURL } from "node:url";
 import { copy as copyDataset } from "./datasets.mjs";
+import { canRegisterRunners, registerRunners } from "./runners.mjs";
 import { HOST_STATE, SERVICES, datasets, guardTarget, host, loadJson, log, parseArgs, run, runOk, sshCmd, sshTarget, step } from "./lib.mjs";
 
 /** Never mirrored: per-PR previews, backups, archives, and fast-changing telemetry. Paths relative to /opt/services. */
@@ -73,6 +75,42 @@ ${dryRun ? "" : `${rsync.replace("--delete ", "")} '${remote}:/root/.docker/conf
   log(out || "(no changes)");
 }
 
+/**
+ * Folders sync leaves out (telemetry, raw database directories) still have to exist with the source's owner and
+ * mode: containers that don't run as root (loki, tempo, otel-collector as uid 10001) can't create or write them
+ * otherwise, and some images refuse to start without them (Plane's logs). Only the folder itself, not its contents.
+ */
+function prepareSkippedDirs(from, to) {
+  const raw = loadJson("hosts/datasets.json").rawDirs.map((d) => `${SERVICES}/${d}`);
+  const telemetry = EXCLUDES.filter((e) => e.startsWith("/data/app-assets/") && e !== "/data/app-assets/qa/").map((e) => `${SERVICES}${e.replace(/\/$/, "")}`);
+  const paths = [...raw, ...telemetry];
+  const stats = run(from, `for p in ${paths.map((p) => `'${p}'`).join(" ")}; do sudo test -d "$p" && sudo stat -c '%u:%g %a %n' "$p"; done; true`, { quiet: true });
+  const lines = stats.split("\n").filter(Boolean);
+  if (!lines.length) return;
+  run(to, lines.map((l) => {
+    const [owner, mode, ...rest] = l.split(" ");
+    const dir = rest.join(" ");
+    return `sudo mkdir -p '${dir}' && sudo chown ${owner} '${dir}' && sudo chmod ${mode} '${dir}'`;
+  }).join("\n"));
+  log(`prepared ${lines.length} folders that aren't copied (owner and mode as on ${from.name})`);
+}
+
+/** Named volumes of the synced projects (e.g. dozzle's users file): copied whole, with the project stopped. */
+function copyVolumes(from, to, projects) {
+  const wanted = new Set(projects.map((p) => p.project));
+  const vols = run(from, `sudo docker volume ls --format '{{.Name}}|{{.Label "com.docker.compose.project"}}'`, { quiet: true })
+    .split("\n").map((l) => l.split("|")).filter(([name, project]) => name && wanted.has(project));
+  if (!vols.length) return;
+  step(`${from.name} → ${to.name}: ${vols.length} named volume(s)`);
+  for (const [vol, project] of vols) {
+    const p = projects.find((x) => x.project === project);
+    run(to, `cd ${p.dir} && sudo docker compose ${composeArgs(p)} stop >/dev/null 2>&1 || true
+${sshCmd(from)} "sudo docker run --rm -v ${vol}:/v:ro alpine tar -C /v -cf - ." | sudo docker run --rm -i -v ${vol}:/v alpine sh -c 'find /v -mindepth 1 -delete && tar -C /v -xf -'
+cd ${p.dir} && sudo docker compose ${composeArgs(p)} up -d >/dev/null 2>&1`);
+    log(`  ${vol} (${project}): copied`);
+  }
+}
+
 function ensureNetworks(from, to) {
   // Networks made by hand (not by a compose project) that compose files join as `external`, e.g. `proxy`.
   const names = run(from, `sudo docker network ls --format '{{.Name}}|{{.Label "com.docker.compose.network"}}' | awk -F'|' '$2 == "" && $1 !~ /^(bridge|host|none)$/ { print $1 }'`, { quiet: true }).split("\n").filter(Boolean);
@@ -84,8 +122,11 @@ function ensureImages(from, to, p) {
   const images = run(to, `cd ${p.dir} && sudo docker compose ${composeArgs(p)} config --images`, { quiet: true }).split("\n").filter(Boolean);
   for (const img of images) {
     if (runOk(to, `sudo docker image inspect '${img}' >/dev/null 2>&1`)) continue;
-    if (runOk(to, `sudo docker pull -q '${img}' >/dev/null 2>&1`)) continue;
-    log(`  ${img}: not pullable, streaming it from ${from.name}`);
+    // Pull from the registry first (big images take minutes); stream from the source only for images no registry
+    // has, like local builds. Streaming goes over the source's network, which may be weak (glados is on Wi-Fi).
+    const pulled = run(to, `sudo docker pull -q '${img}' >/dev/null 2>&1 && echo ok || echo no`, { quiet: true, timeoutMs: 30 * 60 * 1000 });
+    if (pulled === "ok") continue;
+    log(`  ${img}: not in any registry this host can reach, streaming it from ${from.name}`);
     run(to, `${sshCmd(from)} "sudo docker save '${img}'" | sudo docker load -q`);
   }
 }
@@ -120,7 +161,7 @@ export function copyDatabases(from, to) {
   }
 }
 
-export function syncHosts(from, to, { dryRun = false, overwriteActive = false, skipData = false } = {}) {
+export function syncHosts(from, to, { dryRun = false, overwriteActive = false, skipData = false, skipRunners = false } = {}) {
   if (from.name === to.name) throw new Error("--from and --to are the same host");
   for (const h of [from, to]) if (!runOk(h, "true")) throw new Error(`Can't reach ${h.name} (${sshTarget(h)}) over SSH`);
   guardTarget(to, { overwriteActive });
@@ -133,19 +174,27 @@ export function syncHosts(from, to, { dryRun = false, overwriteActive = false, s
     step(`${to.name}: would start ${projects.length} projects`);
     log(projects.map((p) => p.project).join(", "));
     log(`skipped on ${to.name}: ${[...skip].join(", ")}`);
+    if (!skipRunners && canRegisterRunners()) registerRunners(to, { dryRun: true });
     return;
   }
   ensureNetworks(from, to);
+  prepareSkippedDirs(from, to);
   startProjects(from, to, projects);
+  copyVolumes(from, to, projects);
   if (!skipData) copyDatabases(from, to);
+  if (!skipRunners) {
+    if (canRegisterRunners()) registerRunners(to);
+    else log(`
+⚠ gh isn't signed in here, so ${to.name} got no CI runners. From a machine where it is: node ci/scripts/host/runners.mjs --host ${to.name}`);
+  }
   step("done");
   log(run(to, `sudo docker ps --format '{{.Names}}' | wc -l`, { quiet: true }) + ` containers running on ${to.name}`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const args = parseArgs(process.argv.slice(2), { from: "string", to: "string", dryRun: "bool", overwriteActive: "bool", skipData: "bool" });
+  const args = parseArgs(process.argv.slice(2), { from: "string", to: "string", dryRun: "bool", overwriteActive: "bool", skipData: "bool", skipRunners: "bool" });
   if (!args.from || !args.to) {
-    console.error("Usage: sync.mjs --from <host> --to <host> [--dry-run] [--skip-data] [--overwrite-active]");
+    console.error("Usage: sync.mjs --from <host> --to <host> [--dry-run] [--skip-data] [--skip-runners] [--overwrite-active]");
     process.exit(2);
   }
   try {
