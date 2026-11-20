@@ -72,8 +72,9 @@ Moving back later is the same with the names swapped.
 1. **Get a Linux shell on it with systemd:**
    - Windows: in an admin PowerShell, from a devops clone or a copy of the script:
      `powershell -ExecutionPolicy Bypass -File host\windows\setup.ps1`. It installs WSL2 Ubuntu, `.wslconfig`
-     (no idle shutdown), a start-at-sign-in task, and no sleep on mains. Joe creates the user `joe` on first launch,
-     and should turn on automatic sign-in so it survives reboots unattended.
+     (no idle shutdown), a task that starts WSL at boot with nobody signed in (asks for the Windows password once),
+     no automatic Windows Update restarts, and no sleep on mains. Joe creates the Linux user on first launch.
+     Before restarting a Windows host (updates), promote the other host first.
    - Mac: OrbStack (or Lima) with an Ubuntu machine.
    - Linux: nothing extra.
 2. **Inside that shell, as the deploy user:**
