@@ -20,7 +20,8 @@ From a clone of this repo, on any machine that can SSH to the hosts:
 | Command | Does |
 |---|---|
 | `node ci/scripts/host/status.mjs [--runners] [--data]` | Which host is active, what runs where, battery, data side by side |
-| `node ci/scripts/host/sync.mjs --from A --to B [--dry-run]` | Mirror A's stack and data onto standby B |
+| `node ci/scripts/host/sync.mjs --from A --to B [--dry-run]` | Mirror A's stack and data onto standby B, and register B's CI runners |
+| `node ci/scripts/host/runners.mjs --host B [--dry-run]` | Register B's CI runners (sync does this; tokens minted by `gh` on the controller) |
 | `node ci/scripts/host/promote.mjs B [--yes] [--no-sync]` | Make B active: tunnel, crons and the `glados` runner label move to it |
 | `node ci/scripts/host/data-copy.mjs --from A --to B [--only x,y] [--dry-run]` | Overwrite B's datasets with A's (snapshot first) |
 | `node ci/scripts/host/data-restore.mjs --host B --dataset x [--list \| --stamp S]` | Put a snapshot back |
@@ -35,8 +36,9 @@ Data can also be copied from GitHub: Actions → **Copy data between hosts** (a 
 - **Traffic:** the tunnel is token-based, so whichever host runs `cloudflared` with that token gets the traffic.
   DNS never changes. Two connectors at once would split requests between hosts, so only `promote` starts it.
 - **CI:** every repo's deploy jobs use `runs-on: [self-hosted, glados]`. `glados` is now the production label:
-  promote moves it to the new host's runners through the GitHub API, so no workflow changes. Runners for a new host
-  are registered with `register.mjs --host <name>` and labelled `host-<name>` only.
+  promote moves it to the new host's runners through the GitHub API, so no workflow changes. `sync` registers a new
+  host's runners (`runners.mjs`): the controller mints each registration token with `gh` and configures the runner
+  over SSH, labelled `host-<name>` only.
 - **Data:** `sync` mirrors `/opt/services` with rsync, except QA previews, backups, telemetry and raw database
   directories, and copies Mongo and Postgres with dump and restore. `data-copy` does one dataset at a time in
   either direction, with a snapshot first.

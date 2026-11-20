@@ -98,9 +98,8 @@ say "done: $NAME is ready"
 cat <<EOF
 Next, from a machine with the devops repo:
   1. Add "$NAME" to hosts/hosts.json (if it isn't there) and commit.
-  2. Register its CI runners (on this host, in a devops clone, with RUNNER_ADMIN_PAT set):
-       node ci/scripts/runners/register.mjs --from-list ci/runners.json --host $NAME
-  3. Copy the stack onto it:   node ci/scripts/host/sync.mjs --from <active host> --to $NAME
-  4. When you want it live:    node ci/scripts/host/promote.mjs $NAME --yes
+  2. Copy the stack onto it, which also registers its CI runners (run where gh is signed in):
+       node ci/scripts/host/sync.mjs --from <active host> --to $NAME
+  3. When you want it live:    node ci/scripts/host/promote.mjs $NAME --yes
 Log out and back in once so plain \`docker\` works without sudo.
 EOF
