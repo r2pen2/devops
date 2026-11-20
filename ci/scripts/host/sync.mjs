@@ -13,12 +13,14 @@
  *   3. creates the shared docker networks, pulls every image (streaming ones that can't be pulled, like local
  *      builds, straight from the source), and starts every compose project the source runs, except the tunnel
  *      (only the active host runs cloudflared) and the projects the target's `skip` lists;
- *   4. copies the Mongo and Postgres databases logically (dump on the source, restore on the target).
+ *   4. copies the Mongo and Postgres databases logically (dump on the source, restore on the target);
+ *   5. registers the target's CI runners (runners.mjs), if `gh` is signed in where this runs (--skip-runners: don't).
  *
  * Refuses to write over the ACTIVE host (the one running cloudflared). Env files go host to host over SSH only.
  */
 import { pathToFileURL } from "node:url";
 import { copy as copyDataset } from "./datasets.mjs";
+import { canRegisterRunners, registerRunners } from "./runners.mjs";
 import { HOST_STATE, SERVICES, datasets, guardTarget, host, loadJson, log, parseArgs, run, runOk, sshCmd, sshTarget, step } from "./lib.mjs";
 
 /** Never mirrored: per-PR previews, backups, archives, and fast-changing telemetry. Paths relative to /opt/services. */
@@ -120,7 +122,7 @@ export function copyDatabases(from, to) {
   }
 }
 
-export function syncHosts(from, to, { dryRun = false, overwriteActive = false, skipData = false } = {}) {
+export function syncHosts(from, to, { dryRun = false, overwriteActive = false, skipData = false, skipRunners = false } = {}) {
   if (from.name === to.name) throw new Error("--from and --to are the same host");
   for (const h of [from, to]) if (!runOk(h, "true")) throw new Error(`Can't reach ${h.name} (${sshTarget(h)}) over SSH`);
   guardTarget(to, { overwriteActive });
@@ -133,19 +135,25 @@ export function syncHosts(from, to, { dryRun = false, overwriteActive = false, s
     step(`${to.name}: would start ${projects.length} projects`);
     log(projects.map((p) => p.project).join(", "));
     log(`skipped on ${to.name}: ${[...skip].join(", ")}`);
+    if (!skipRunners && canRegisterRunners()) registerRunners(to, { dryRun: true });
     return;
   }
   ensureNetworks(from, to);
   startProjects(from, to, projects);
   if (!skipData) copyDatabases(from, to);
+  if (!skipRunners) {
+    if (canRegisterRunners()) registerRunners(to);
+    else log(`
+⚠ gh isn't signed in here, so ${to.name} got no CI runners. From a machine where it is: node ci/scripts/host/runners.mjs --host ${to.name}`);
+  }
   step("done");
   log(run(to, `sudo docker ps --format '{{.Names}}' | wc -l`, { quiet: true }) + ` containers running on ${to.name}`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const args = parseArgs(process.argv.slice(2), { from: "string", to: "string", dryRun: "bool", overwriteActive: "bool", skipData: "bool" });
+  const args = parseArgs(process.argv.slice(2), { from: "string", to: "string", dryRun: "bool", overwriteActive: "bool", skipData: "bool", skipRunners: "bool" });
   if (!args.from || !args.to) {
-    console.error("Usage: sync.mjs --from <host> --to <host> [--dry-run] [--skip-data] [--overwrite-active]");
+    console.error("Usage: sync.mjs --from <host> --to <host> [--dry-run] [--skip-data] [--skip-runners] [--overwrite-active]");
     process.exit(2);
   }
   try {

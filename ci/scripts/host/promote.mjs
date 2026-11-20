@@ -55,7 +55,7 @@ function moveRunnerLabel(fromName, to, { dryRun }) {
     const runners = JSON.parse(gh(["api", `repos/${repo}/actions/runners?per_page=100`, "--jq", ".runners"]) || "[]");
     const mine = runners.filter((r) => runnerHost(r) === to.name);
     if (!mine.length) {
-      log(`  ${repo}: ⚠ no runner on ${to.name}; its deploy jobs will wait. Register one: register.mjs --host ${to.name}`);
+      log(`  ${repo}: ⚠ no runner on ${to.name}; its deploy jobs will wait. Register them: runners.mjs --host ${to.name}`);
       continue;
     }
     const plan = [];

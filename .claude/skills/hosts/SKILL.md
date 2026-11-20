@@ -17,7 +17,8 @@ r2pen2/devops (local clone: `D:\Code\devops`), with the projects each must `skip
   Their data is a copy, refreshed by `sync`.
 
 Scripts are in `ci/scripts/host/`, run with node from the devops clone, from anywhere that can SSH to the hosts
-(`ssh joe@<name>` over Tailscale). Read a script's header before using an option you haven't used.
+(`ssh <user>@<name>` over Tailscale; a host's `address`, e.g. a LAN IP, is used instead while it isn't on the
+tailnet). Run from a host itself, set `HOST_NAME=<its name>` so it runs its own commands locally. Read a script's header before using an option you haven't used.
 
 ## Rules
 
@@ -52,10 +53,11 @@ node ci/scripts/host/status.mjs --data       # every dataset on every host, side
 ## Planned move (e.g. glados → bouldergeist)
 
 1. `sync.mjs --from <active> --to <standby> --dry-run`, then without `--dry-run`. First sync takes a while
-   (images, ~3 GB of data). It starts every project except the tunnel and the target's `skip` list, then copies
-   the Mongo/Postgres databases by dump and restore.
+   (images, ~1 GB of data). It starts every project except the tunnel and the target's `skip` list, copies
+   the Mongo/Postgres databases by dump and restore, and registers the standby's CI runners (runners.mjs; needs
+   `gh` signed in where it runs, which mints the tokens, so the host never holds one).
 2. Check the standby serves locally: `ssh joe@<standby> "curl -s -o /dev/null -w '%{http_code}' -H 'Host: youcandoitgardening.com' http://127.0.0.1/"` → 200.
-3. Make sure the standby has runners (`status --runners`; register below if not).
+3. Make sure the standby has runners: `status --runners`, or `runners.mjs --host <standby>` if sync couldn't.
 4. `promote.mjs <standby>` shows the plan; with Joe's OK, `--yes`. Public sites are down for the few minutes
    between stopping the old tunnel and starting the new one (the final sync happens in between).
    On failed health checks it hands everything back automatically.
@@ -79,10 +81,9 @@ Moving back later is the same with the names swapped.
 3. **Register it:** add an entry to `hosts/hosts.json` (name, os, user, tailscale, `skip` for hardware it lacks,
    `skipRepos` for repos whose deploy jobs need that hardware), and add it to the `from`/`to` choices in
    `.github/workflows/data-copy.yml`. PR in r2pen2/devops.
-4. **Runners**, on the new host (needs `RUNNER_ADMIN_PAT` or `gh auth` with admin on the repos):
-   `node ci/scripts/runners/register.mjs --from-list ci/runners.json --host <name>`
-   They're labelled `host-<name>` only, so they take no production jobs until a promote.
-5. **Copy the stack:** the "Planned move" steps 1–3. Now it's a working standby.
+4. **Copy the stack:** the "Planned move" steps 1–3, from a machine where `gh` is signed in. Sync also registers
+   the host's CI runners (`<name>-<repo>`, label `host-<name>` only, so no production jobs until a promote).
+   Now it's a working standby.
 
 Tailscale SSH must allow hosts to reach each other as `joe` (and the scripts run `sudo` there): in the tailnet
 ACL, an `ssh` rule with `"action": "accept"` (not `check`) from Joe's devices to Joe's devices.
