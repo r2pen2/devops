@@ -7,8 +7,8 @@
   script works unchanged. This script:
     1. installs WSL2 and the Ubuntu distro (first launch asks for a username: use the one in hosts/hosts.json, "joe");
     2. writes %UserProfile%\.wslconfig: most of the RAM for the stack, and no idle shutdown of the VM or distro;
-    3. adds a scheduled task that starts the distro AT BOOT, signed in or not, and keeps it running (asks once for
-       this account's Windows password, which Windows stores with the task);
+    3. adds a scheduled task that starts the distro AT BOOT, signed in or not, and keeps it running (an S4U task:
+       runs as this account without storing its password);
     4. stops Windows Update from restarting the PC on its own (move the stack to the other host, then restart);
     5. stops the PC from sleeping or hibernating on mains power.
   Then, inside the distro: bash ci/scripts/host/bootstrap.sh bouldergeist   (see docs/hosts.md).
@@ -18,13 +18,25 @@
   powershell -ExecutionPolicy Bypass -File host\windows\setup.ps1 -Distro Ubuntu-24.04 -MemoryGB 12
 #>
 param(
-  [string]$Distro = "Ubuntu-24.04",
+  # Default: the distro that already holds /opt/services (the stack), else Ubuntu-24.04 for a fresh host.
+  [string]$Distro = "",
   [int]$MemoryGB = 0
 )
 $ErrorActionPreference = "Stop"
 
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) { throw "Run this in PowerShell as Administrator." }
+
+if (-not $Distro) {
+  # bouldergeist has two Ubuntus; only one runs the stack, and it isn't the one named Ubuntu-24.04.
+  # Only look in running distros when any run, so the check doesn't start (and keep running) an unused one.
+  $running = @((wsl.exe --list --running --quiet 2>$null) -replace "`0", "" | Where-Object { $_ })
+  $candidates = if ($running.Count) { $running } else { (wsl.exe --list --quiet 2>$null) -replace "`0", "" | Where-Object { $_ } }
+  $Distro = $candidates | Where-Object {
+    wsl.exe -d $_ --exec /usr/bin/test -d /opt/services 2>$null; $LASTEXITCODE -eq 0
+  } | Select-Object -First 1
+  if (-not $Distro) { $Distro = "Ubuntu-24.04" }
+}
 
 Write-Host "`n== WSL2 and $Distro"
 $installed = (wsl.exe --list --quiet 2>$null) -replace "`0", "" | Where-Object { $_ -eq $Distro }
@@ -36,7 +48,10 @@ if (-not $installed) {
   Write-Host "$Distro is installed."
 }
 wsl.exe --set-default $Distro 2>$null | Out-Null
-wsl.exe --update 2>$null | Out-Null
+# Not on a host that's serving: an update restarts WSL, which takes the stack down.
+if (-not ((wsl.exe --list --running --quiet 2>$null) -replace "`0", "" | Where-Object { $_ -eq $Distro })) {
+  wsl.exe --update 2>$null | Out-Null
+}
 
 Write-Host "`n== .wslconfig"
 if ($MemoryGB -le 0) {
@@ -58,20 +73,22 @@ Write-Host "memory=${MemoryGB}GB, no idle shutdown ($env:USERPROFILE\.wslconfig)
 
 Write-Host "`n== Start the stack at boot (no sign-in needed)"
 # A sign-in trigger left the sites down for five hours after a Windows Update restart: Windows came back, nobody
-# signed in, WSL never started. This task starts at boot and runs whether or not anyone is signed in, which
-# needs the account's password stored with the task (Windows keeps it; it isn't written anywhere else).
+# signed in, WSL never started. This task starts at boot and runs whether or not anyone is signed in. S4U runs it
+# as this account with no stored password (no network shares, which WSL doesn't need).
+# No shell in the arguments: Task Scheduler doesn't treat single quotes as quotes.
 $taskName = "joed.dev host ($Distro)"
-$user = "$env:USERDOMAIN\$env:USERNAME"
-$action = New-ScheduledTaskAction -Execute "wsl.exe" -Argument "-d $Distro --exec /bin/sh -c 'exec sleep infinity'"
+$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name   # not USERDOMAIN: it's WORKGROUP over SSH
+Get-ScheduledTask -TaskName "joed.dev host*" -ErrorAction SilentlyContinue | Where-Object TaskName -ne $taskName |
+  Unregister-ScheduledTask -Confirm:$false
+$action = New-ScheduledTaskAction -Execute "wsl.exe" -Argument "-d $Distro --exec /usr/bin/sleep infinity"
 $boot = New-ScheduledTaskTrigger -AtStartup
 $boot.Delay = "PT30S"
 # Also at sign-in, in case the boot-time start lost a race with the WSL service.
 $triggers = @($boot, (New-ScheduledTaskTrigger -AtLogOn -User $user))
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
   -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -Hidden
-$cred = Get-Credential -UserName $user -Message "Windows password for $user, so the stack starts at boot without a sign-in"
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $settings `
-  -User $user -Password $cred.GetNetworkCredential().Password -RunLevel Highest -Force | Out-Null
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Highest
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $settings -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName $taskName
 Write-Host "Task '$taskName' starts $Distro at boot and keeps it running, signed in or not."
 
