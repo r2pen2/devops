@@ -7,8 +7,7 @@
     "data/app-assets/umami/db",
     "data/app-assets/plane/pgdata",
     "data/app-assets/plane/redisdata",
-    "data/app-assets/plane/rabbitmq",
-    "data/app-assets/plane/logs"
+    "data/app-assets/plane/rabbitmq"
   ],
   "datasets": [
     { "name": "citrus-mongo", "type": "mongo", "container": "citrus-mongo" },
