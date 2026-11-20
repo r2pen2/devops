@@ -14,7 +14,6 @@
       "os": "linux",
       "user": "joe",
       "tailscale": "glados",
-      "address": "10.0.0.172",
       "skip": [],
       "notes": "2014 MacBook Pro, 4 threads, 7 GiB, Wi-Fi. Owns the Bluetooth speaker (LEXON MINO) and the LAN DNS (coredns on 10.0.0.172)."
     },
