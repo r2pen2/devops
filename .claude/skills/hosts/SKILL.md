@@ -25,7 +25,9 @@ tailnet). Run from a host itself, set `HOST_NAME=<its name>` so it runs its own 
 - **Never two tunnels, except inside `promote`.** If two hosts run `cloudflared`, Cloudflare splits requests between
   them and the data diverges. `promote` deliberately overlaps them for about a minute so the sites never go down
   (Joe prefers a few lost writes to downtime); `--clean-cut` stops the old one first instead. Nothing else should
-  start or stop the tunnel. `status` warns when two run.
+  start or stop the tunnel, besides the watchdog (below). `status` warns when two run.
+- **Before restarting a host on purpose** (Windows updates, maintenance): promote the other host first, or
+  at least `watchdog.mjs pause --minutes 30`, or the watchdog will fail over mid-restart.
 - **Ask Joe before** `promote --yes`, `data-copy` without `--dry-run`, `data-restore`, or anything with
   `--overwrite-active`. Show him the plan or the dry run first. Read-only commands (`status`, dry runs) need no ask.
 - **Never print or copy secrets** into the conversation: `/opt/services/data/app-env/*` moves host to host via
@@ -40,17 +42,34 @@ node ci/scripts/host/status.mjs --runners    # which runner holds the production
 node ci/scripts/host/status.mjs --data       # every dataset on every host, side by side
 ```
 
+## Watchdog (automatic failover)
+
+`host-watchdog.timer` runs `ci/scripts/host/watchdog.sh` every minute on every host (installed by
+`node ci/scripts/host/watchdog.mjs install`; re-run it after changing `hosts.json` or the script).
+- A **standby** takes over (starts its tunnel and crons) when the sites in `hosts.json` `watchdog.checks` get
+  Cloudflare's no-tunnel errors (502/503/530) 3 minutes in a row AND the active host is unreachable or its
+  tunnel is down. Its own internet being down (no answer at all) never triggers it.
+- When the dead host comes back with its tunnel, both run it; after 5 minutes the one that became active earlier
+  (`/opt/services/host-state/active-since`, written by promote and by a takeover) stops its tunnel.
+- The **active** host emails when the sites are down although its tunnel runs (failing over wouldn't help).
+- Every event emails `watchdog.alertTo` through the host's own site-mail. A takeover does NOT move the deploy
+  runner label (needs `gh`): finish with `promote.mjs <new active> --yes`, then compare data (`status --data`).
+- `watchdog.mjs log` shows what each host's watchdog did; `pause`/`resume`; `test-mail --host x`.
+  `promote` pauses all watchdogs while it runs.
+
 ## The active host is down (sites return Cloudflare 530/1033)
 
+0. The watchdog should already have failed over within ~4 minutes and emailed: `watchdog.mjs log`, `status`.
+   If it did, finish the move (runner label) and skip to step 4.
 1. `status.mjs`: is the active host unreachable, or reachable with its containers stopped?
 2. Reachable but stopped (it rebooted, Docker is slow): wait for Docker, then check again; often nothing else is
    needed. glados' battery shows in status; "Discharging" while plugged in means the charger can't keep up.
 3. Unreachable, or not coming back: tell Joe, then promote the standby without a final sync:
    `node ci/scripts/host/promote.mjs <standby>` (plan), then with `--yes --no-sync` once he agrees.
    It serves the data from the last sync; anything written on the dead host since then stays there.
-4. When the old host returns, it must not start its tunnel: run `status`. If both run it, stop the one that
-   isn't supposed to be active by promoting the right one again (`promote <the right one> --yes`, which skips
-   work that's already done). Then compare data (`status --data`) and decide with Joe what to copy.
+4. When the old host returns, its watchdog hands over within ~5 minutes; check with `status`. If both still run
+   the tunnel, promote the right one again (`promote <the right one> --yes`, which skips work that's already
+   done). Then compare data (`status --data`) and decide with Joe what to copy.
 
 ## Planned move (e.g. glados → bouldergeist)
 

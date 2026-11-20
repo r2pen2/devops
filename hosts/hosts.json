@@ -8,6 +8,11 @@
     "https://wl-auth.joed.dev/liveness",
     "https://billing.joed.dev/liveness"
   ],
+  "watchdog": {
+    "$comment": "ci/scripts/host/watchdog.sh, on every host: a standby takes over when these sites get Cloudflare's no-tunnel errors and the active host is gone; alerts go to alertTo through site-mail.",
+    "checks": ["https://joed.dev/", "https://youcandoitgardening.com/"],
+    "alertTo": "joedobbelaar@gmail.com"
+  },
   "hosts": [
     {
       "name": "glados",
