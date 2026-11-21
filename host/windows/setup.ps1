@@ -10,7 +10,8 @@
     3. adds a scheduled task that starts the distro AT BOOT, signed in or not, and keeps it running (an S4U task:
        runs as this account without storing its password);
     4. stops Windows Update from restarting the PC on its own (move the stack to the other host, then restart);
-    5. stops the PC from sleeping or hibernating on mains power.
+    5. stops the PC from sleeping, hibernating or turning its screen off on mains power (on Modern Standby
+       laptops, screen off IS standby), and makes closing the lid do nothing.
   Then, inside the distro: bash ci/scripts/host/bootstrap.sh bouldergeist   (see docs/hosts.md).
 
 .EXAMPLE
@@ -109,8 +110,14 @@ Write-Host "Windows Update won't restart this PC on its own; active hours 06:00-
 Write-Host "`n== Power: never sleep on mains"
 powercfg /change standby-timeout-ac 0
 powercfg /change hibernate-timeout-ac 0
-powercfg /change monitor-timeout-ac 15
-Write-Host "Sleep and hibernate are off while plugged in."
+# Modern Standby PCs (most laptops: `powercfg /a` lists "Standby (S0 Low Power Idle)") treat the screen turning
+# off as standby and can drop from there into real sleep, which pauses WSL and the stack, whatever "sleep after"
+# says. bouldergeist did exactly that one morning after its screen went off. So the screen never times out on
+# mains (turn the brightness down instead), and closing the lid does nothing.
+powercfg /change monitor-timeout-ac 0
+powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0
+powercfg /setactive SCHEME_CURRENT
+Write-Host "Sleep, hibernate and the screen timeout are off while plugged in; closing the lid does nothing."
 
 Write-Host "`n== Next"
 Write-Host "Open $Distro and run (as joe):"

@@ -49,8 +49,14 @@ export function isLocal(h) {
 /** How to reach a host: `address` (e.g. a LAN IP while it isn't on the tailnet yet), else its Tailscale name. */
 export const sshTarget = (h) => `${h.user}@${h.address || h.tailscale || h.name}`;
 const SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=accept-new"];
-/** The ssh command line, as a string, for scripts that run ON one host and reach ANOTHER. */
-export const sshCmd = (h) => `ssh ${SSH_OPTS.join(" ")} ${sshTarget(h)}`;
+/**
+ * The ssh command line, as a string, for scripts that run ON one host and reach ANOTHER. Scripts reach a host on
+ * ssh's stdin (run() pipes them to `bash -s`), so a nested ssh that only produces output must not read stdin:
+ * it would swallow the rest of the script, which then ends "successfully" without running it. That is how
+ * every Postgres copy silently did nothing. Use `{ stdin: true }` only when the remote side reads stdin
+ * (rsync's transport).
+ */
+export const sshCmd = (h, { stdin = false } = {}) => `ssh ${stdin ? "" : "-n "}${SSH_OPTS.join(" ")} ${sshTarget(h)}`;
 
 /**
  * Runs a bash script on a host (locally, or over SSH) and returns stdout. The script goes over stdin, so it never

@@ -22,7 +22,8 @@ const PG_COUNT = `select count(*) || ' tables, ' || coalesce(sum((xpath('/row/c/
 from information_schema.tables where table_schema not in ('pg_catalog', 'information_schema') and table_type = 'BASE TABLE';`;
 
 /** Recreates the container's database empty, so a restore lands exactly the dump (and app connections drop). */
-const PG_RECREATE = `sudo docker exec -i "$C" sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -q -c "DROP DATABASE IF EXISTS \\"$POSTGRES_DB\\" WITH (FORCE)" -c "CREATE DATABASE \\"$POSTGRES_DB\\" OWNER \\"$POSTGRES_USER\\""'`;
+// No -i: it doesn't read stdin, and with -i docker would swallow the rest of the script (the restore after it).
+const PG_RECREATE = `sudo docker exec "$C" sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -q -c "DROP DATABASE IF EXISTS \\"$POSTGRES_DB\\" WITH (FORCE)" -c "CREATE DATABASE \\"$POSTGRES_DB\\" OWNER \\"$POSTGRES_USER\\""'`;
 const PG_RESTORE = `sudo docker exec -i "$C" sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --exit-on-error'`;
 const PG_DUMP = `sudo docker exec "$C" sh -c 'pg_dump -U "$POSTGRES_USER" -Fc "$POSTGRES_DB"'`;
 const MONGO_RESTORE = `sudo docker exec -i "$C" mongorestore --archive --drop --quiet --nsExclude 'admin.*' --nsExclude 'config.*'`;
@@ -79,6 +80,7 @@ ls -1t '${SNAPSHOTS}/${ds.name}-'* 2>/dev/null | tail -n +11 | xargs -r sudo rm 
  */
 export function copy(from, to, ds, { stopSource = false } = {}) {
   const src = sshCmd(from);
+  const rsyncSsh = sshCmd(from, { stdin: true }).replace(/ \S+$/, "");
   if (ds.type === "mongo") {
     run(to, `C=${ds.container}
 ${src} "sudo docker exec ${ds.container} mongodump --archive --quiet" | ${MONGO_RESTORE}`);
@@ -101,7 +103,7 @@ ${PG_RESTORE} < "$TMP"`);
     run(to, `STOPPED=$(${containersMounting(dir)} | tr '\\n' ' ')
 [ -n "$STOPPED" ] && sudo docker stop $STOPPED >/dev/null
 sudo mkdir -p '${dir}'
-sudo rsync -aH --numeric-ids --delete -e "sudo -u $(id -un) ${src.replace(/ \S+$/, "")}" --rsync-path="sudo rsync" '${sshTarget(from)}:${dir}/' '${dir}/'
+sudo rsync -aH --numeric-ids --delete -e "sudo -u $(id -un) ${rsyncSsh}" --rsync-path="sudo rsync" '${sshTarget(from)}:${dir}/' '${dir}/'
 [ -n "$STOPPED" ] && sudo docker start $STOPPED >/dev/null
 true`);
   } finally {
