@@ -42,6 +42,19 @@ node ci/scripts/host/status.mjs --runners    # which runner holds the production
 node ci/scripts/host/status.mjs --data       # every dataset on every host, side by side
 ```
 
+## Which host serves which site (placement)
+
+By default the active host (the tunnel) serves every site. `hosts.json` `placement` pins a hostname to a host
+(`"home.joed.dev": "glados"`): the tunnel host's Traefik forwards that whole hostname to the owner's Traefik over
+Tailscale, which applies its own routes and sign-in. If the owner is down, the site falls back to the tunnel
+host's own copy, unless that host can't run it (its `skip` list), e.g. Home Assistant.
+- Change it: edit `placement`, then `node ci/scripts/host/placement.mjs` (plan) and `--apply` (every host; Traefik
+  reloads `infra/traefik/dynamic/placement.yml` live, no restart; it checks the result and restores on failure),
+  then `watchdog.mjs install` so the probe knows the new list. A site placed on a host must run there.
+- Who served a site: `curl -sI https://<site>/.well-known/wl-served-by | grep -i x-served-by`.
+- Dashboard: Grafana → WL-Universe Liveness (grafana.joed.dev/d/wl-liveness): every site up/down and which machine
+  served it, over time. Fed by `site-probe.sh` (every minute on each host → its Pushgateway → Prometheus).
+
 ## Watchdog (automatic failover)
 
 `host-watchdog.timer` runs `ci/scripts/host/watchdog.sh` every minute on every host (installed by

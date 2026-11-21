@@ -9,7 +9,8 @@
  *   node ci/scripts/host/watchdog.mjs resume
  *   node ci/scripts/host/watchdog.mjs test-mail --host glados   # check it can email you
  *
- * Installs /opt/services/bin/host-watchdog, /opt/services/host-state/watchdog.env (this host's name, its peers,
+ * Also installs the public site probe (site-probe.sh → Pushgateway → Grafana's WL-Universe Liveness), on its
+ * own timer. Installs /opt/services/bin/host-watchdog, /opt/services/host-state/watchdog.env (this host's name, its peers,
  * the checks and alert address from hosts.json `watchdog`), and host-watchdog.timer (root). Re-run install after
  * changing hosts.json or watchdog.sh. Each host must reach the others as root over Tailscale SSH: install checks.
  */
@@ -27,8 +28,17 @@ Type=oneshot
 ExecStart=${SERVICES}/bin/host-watchdog
 TimeoutStartSec=300
 `;
+const PROBE_UNIT = `[Unit]
+Description=joed.dev public site probe (Grafana: WL-Universe Liveness; see r2pen2/devops ci/scripts/host/site-probe.sh)
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=${SERVICES}/bin/site-probe
+TimeoutStartSec=120
+`;
 const TIMER = `[Unit]
-Description=Run the joed.dev host watchdog every minute
+Description=Run a joed.dev host job every minute
 
 [Timer]
 OnBootSec=2min
@@ -44,16 +54,21 @@ const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 function install(h) {
   step(`${h.name}: watchdog`);
-  const { watchdog = {} } = loadJson("hosts/hosts.json");
+  const { watchdog = {}, placement = {} } = loadJson("hosts/hosts.json");
   const peers = hosts().filter((p) => p.name !== h.name).map((p) => `${p.name}=${sshTarget(p)}`);
   const env = [
     `HOST_NAME=${shq(h.name)}`,
     `PEERS=${shq(peers.join(" "))}`,
     `CHECKS=${shq((watchdog.checks || []).join(" "))}`,
     `ALERT_TO=${shq(watchdog.alertTo || "")}`,
+    // For site-probe.sh: placed sites (probed even where this Traefik doesn't route them), and each host's
+    // number for the dashboard's "served by" timeline.
+    `PLACED=${shq(Object.keys(placement).filter((k) => !k.startsWith("$")).join(" "))}`,
+    `HOST_INDEX=${shq(hosts().map((x, i) => `${x.name}=${i + 1}`).join(" "))}`,
     "",
   ].join("\n");
-  const script = fs.readFileSync(path.join(repoRoot, "ci/scripts/host/watchdog.sh"), "utf8").replace(/\r\n/g, "\n");
+  const read = (f) => fs.readFileSync(path.join(repoRoot, "ci/scripts/host", f), "utf8").replace(/\r\n/g, "\n");
+  const script = read("watchdog.sh");
   run(h, `sudo mkdir -p ${SERVICES}/bin ${HOST_STATE}
 echo ${b64(script)} | base64 -d | sudo tee ${SERVICES}/bin/host-watchdog >/dev/null && sudo chmod 755 ${SERVICES}/bin/host-watchdog
 echo ${b64(env)} | base64 -d | sudo tee ${HOST_STATE}/watchdog.env >/dev/null && sudo chmod 600 ${HOST_STATE}/watchdog.env
@@ -63,7 +78,10 @@ echo ${b64(TIMER)} | base64 -d | sudo tee /etc/systemd/system/host-watchdog.time
 if [ "$(sudo docker inspect -f '{{.State.Running}}' cloudflared 2>/dev/null)" = true ] && [ ! -f ${HOST_STATE}/active-since ]; then
   date -d "$(sudo docker inspect -f '{{.State.StartedAt}}' cloudflared)" +%s | sudo tee ${HOST_STATE}/active-since >/dev/null
 fi
-sudo systemctl daemon-reload && sudo systemctl enable --now host-watchdog.timer >/dev/null 2>&1`);
+echo ${b64(read("site-probe.sh"))} | base64 -d | sudo tee ${SERVICES}/bin/site-probe >/dev/null && sudo chmod 755 ${SERVICES}/bin/site-probe
+echo ${b64(PROBE_UNIT)} | base64 -d | sudo tee /etc/systemd/system/host-site-probe.service >/dev/null
+echo ${b64(TIMER)} | base64 -d | sudo tee /etc/systemd/system/host-site-probe.timer >/dev/null
+sudo systemctl daemon-reload && sudo systemctl enable --now host-watchdog.timer host-site-probe.timer >/dev/null 2>&1`);
   log(`  installed; peers: ${peers.join(", ") || "none"}`);
   // The watchdog asks its peers (as root, over Tailscale SSH) whether their tunnel runs.
   for (const p of hosts().filter((x) => x.name !== h.name)) {

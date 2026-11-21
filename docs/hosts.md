@@ -25,12 +25,20 @@ From a clone of this repo, on any machine that can SSH to the hosts:
 | `node ci/scripts/host/promote.mjs B [--yes] [--no-sync]` | Make B active: tunnel, crons and the `glados` runner label move to it |
 | `node ci/scripts/host/data-copy.mjs --from A --to B [--only x,y] [--dry-run]` | Overwrite B's datasets with A's (snapshot first) |
 | `node ci/scripts/host/data-restore.mjs --host B --dataset x [--list \| --stamp S]` | Put a snapshot back |
+| `node ci/scripts/host/placement.mjs [--apply]` | Pin sites to hosts (`hosts.json` `placement`); the tunnel host forwards them over Tailscale |
 | `node ci/scripts/host/watchdog.mjs install\|log\|pause\|resume\|test-mail` | The automatic failover on every host (below) |
 | `node ci/scripts/host/tag-runners.mjs [--dry-run]` | Label each runner `host-<name>` |
 | `bash ci/scripts/host/bootstrap.sh <name>` | Set up a new host (run on it) |
 | `host/windows/setup.ps1` | Windows only, before bootstrap: WSL2, no sleep, start at boot, no automatic update restarts |
 
 Data can also be copied from GitHub: Actions → **Copy data between hosts** (a dry run by default).
+
+## Placement and the dashboard
+
+`hosts.json` `placement` maps a hostname to the host that serves it; everything else is served by the tunnel host.
+`placement.mjs --apply` writes a Traefik route file on every host (live reload). Grafana's **WL-Universe
+Liveness** dashboard shows every site's liveness and the machine that served it, over time, from `site-probe.sh`
+(installed with the watchdog).
 
 ## Automatic failover (watchdog)
 
