@@ -12,7 +12,8 @@
  *      and copies root's registry login (GHCR);
  *   3. creates the shared docker networks, pulls every image (streaming ones that can't be pulled, like local
  *      builds, straight from the source), and starts every compose project the source runs, except the tunnel
- *      (only the active host runs cloudflared) and the projects the target's `skip` lists;
+ *      (only the active host runs cloudflared) and the projects the target's `skip` lists; projects pinned to
+ *      another host (hosts.json `pinned`) are created but left stopped;
  *   4. copies the Mongo and Postgres databases logically (dump on the source, restore on the target);
  *   5. registers the target's CI runners (runners.mjs), if `gh` is signed in where this runs (--skip-runners: don't).
  *
@@ -21,7 +22,7 @@
 import { pathToFileURL } from "node:url";
 import { copy as copyDataset } from "./datasets.mjs";
 import { canRegisterRunners, registerRunners } from "./runners.mjs";
-import { HOST_STATE, SERVICES, datasets, guardTarget, host, loadJson, log, parseArgs, run, runOk, sshCmd, sshTarget, step } from "./lib.mjs";
+import { HOST_STATE, SERVICES, datasets, guardTarget, host, loadJson, log, parseArgs, pinned, run, runOk, sshCmd, sshTarget, step } from "./lib.mjs";
 
 /** Never mirrored: per-PR previews, backups, archives, and fast-changing telemetry. Paths relative to /opt/services. */
 const EXCLUDES = [
@@ -120,13 +121,15 @@ function ensureNetworks(from, to) {
   log(`networks: ${names.join(", ") || "none"}`);
 }
 
-function ensureImages(from, to, p) {
+export function ensureImages(from, to, p) {
   const images = run(to, `cd ${p.dir} && sudo docker compose ${composeArgs(p)} config --images`, { quiet: true }).split("\n").filter(Boolean);
   for (const img of images) {
     if (runOk(to, `sudo docker image inspect '${img}' >/dev/null 2>&1`)) continue;
     // Pull from the registry first (big images take minutes); stream from the source only for images no registry
     // has, like local builds. Streaming goes over the source's network, which may be weak (glados is on Wi-Fi).
-    const pulled = run(to, `sudo docker pull -q '${img}' >/dev/null 2>&1 && echo ok || echo no`, { quiet: true, timeoutMs: 30 * 60 * 1000 });
+    // Then anonymously: root's GHCR login is whatever token the last CI deploy left, which has expired by now,
+    // and GHCR answers "denied" to an expired login even for public images (Home Assistant's).
+    const pulled = run(to, `{ sudo docker pull -q '${img}' || ( d=$(mktemp -d); sudo env DOCKER_CONFIG="$d" docker pull -q '${img}'; s=$?; rm -rf "$d"; exit $s ); } >/dev/null 2>&1 && echo ok || echo no`, { quiet: true, timeoutMs: 30 * 60 * 1000 });
     if (pulled === "ok") continue;
     log(`  ${img}: not in any registry this host can reach, streaming it from ${from.name}`);
     run(to, `${sshCmd(from)} "sudo docker save '${img}'" | sudo docker load -q`);
@@ -135,8 +138,16 @@ function ensureImages(from, to, p) {
 
 export function startProjects(from, to, projects) {
   step(`${to.name}: start ${projects.length} compose projects`);
+  // Pinned projects run only on their owner; elsewhere they're created (images there, ready for a takeover) and
+  // stopped, so two copies never run at once.
+  const elsewhere = new Set(pinned().filter((p) => p.owner !== to.name).map((p) => p.project));
   for (const p of projects) {
     ensureImages(from, to, p);
+    if (elsewhere.has(p.project)) {
+      run(to, `cd ${p.dir} && sudo docker compose ${composeArgs(p)} create --quiet-pull 2>&1 | tail -2; sudo docker compose ${composeArgs(p)} stop 2>&1 | tail -1`);
+      log(`  ${p.project}: created, stopped (pinned to another host)`);
+      continue;
+    }
     run(to, `cd ${p.dir} && sudo docker compose ${composeArgs(p)} up -d --quiet-pull 2>&1 | tail -2`);
     log(`  ${p.project}: up`);
   }

@@ -36,6 +36,19 @@ export function host(name) {
   return h;
 }
 
+/**
+ * Pinned compose projects (hosts.json `pinned`): each runs on ONE host at a time, the one its site is placed on
+ * (hosts.json `placement`). [{ project, site, owner, refresh: [paths under /opt/services] }]
+ */
+export function pinned() {
+  const { pinned: list = {}, placement = {} } = loadJson("hosts/hosts.json");
+  return Object.entries(list).filter(([k]) => !k.startsWith("$")).map(([project, p]) => {
+    const owner = placement[p.site];
+    if (!owner) throw new Error(`hosts.json: pinned ${project} → ${p.site}, but placement has no host for ${p.site}`);
+    return { project, site: p.site, owner, refresh: p.refresh || [] };
+  });
+}
+
 export function datasets() {
   return loadJson("hosts/datasets.json").datasets;
 }

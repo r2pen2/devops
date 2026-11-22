@@ -46,6 +46,31 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
     echo "systemd is configured but not running yet. In PowerShell run:  wsl --shutdown   then re-run this." >&2
     exit 1
   fi
+  # Audio (the speaker / radio): WSLg's PulseAudio plays out of the PC. Containers mount the deploy user's
+  # /run/user/<uid>/pulse, where WSLg only leaves symlinks into /mnt/wslg; bind the real socket folder there
+  # (before Docker starts its containers), and keep /run/user/<uid> for good (linger) so it isn't torn down.
+  say "WSLg audio for containers"
+  sudo loginctl enable-linger "$ME"
+  uid=$(id -u "$ME")
+  sudo tee /etc/systemd/system/wslg-pulse.service >/dev/null <<UNIT
+[Unit]
+Description=WSLg PulseAudio socket at /run/user/$uid/pulse for containers (r2pen2/devops bootstrap.sh)
+After=user-runtime-dir@$uid.service
+Wants=user-runtime-dir@$uid.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'for i in \$(seq 1 60); do [ -S /mnt/wslg/runtime-dir/pulse/native ] && break; sleep 1; done; mkdir -p /run/user/$uid/pulse; mountpoint -q /run/user/$uid/pulse || mount --bind /mnt/wslg/runtime-dir/pulse /run/user/$uid/pulse'
+ExecStop=/bin/umount -l /run/user/$uid/pulse
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now wslg-pulse.service >/dev/null
+  [ -S "/run/user/$uid/pulse/native" ] && echo "audio: /run/user/$uid/pulse/native → WSLg" || echo "audio: WSLg's PulseAudio socket isn't there (is WSLg on?)" >&2
 fi
 
 say "base packages"

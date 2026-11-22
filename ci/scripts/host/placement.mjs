@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Which host serves which site. hosts.json `placement` maps a hostname to the host that serves it
- * (e.g. "home.joed.dev": "glados", because Home Assistant needs glados' Bluetooth). Every other site is served
- * by the active host (the one running the tunnel), as before.
+ * (e.g. "radio.joed.dev": "glados", where the speaker is wired). Every other site is served by the active host
+ * (the one running the tunnel), as before. Projects in hosts.json `pinned` run only on their site's host: --apply
+ * starts them there and stops them everywhere else (see matchPinned; the watchdog handles a dead owner).
  *
  *   node ci/scripts/host/placement.mjs            # shows what each host's Traefik would get
  *   node ci/scripts/host/placement.mjs --apply    # writes it on every reachable host
@@ -10,15 +11,16 @@
  * Writes /opt/services/infra/traefik/dynamic/placement.yml on every host (Traefik reloads it; no restart):
  * - For each placed site on ANOTHER host: a top-priority router sending the whole hostname to that host's Traefik
  *   over Tailscale, which applies its own routes and sign-in. If that host is down (health check on the path
- *   below) and this host has its own route for the site, it falls back to the local copy; Home Assistant and
- *   the like have none, so they're down with their host.
+ *   below) and this host has its own route for the site, it falls back to the local copy (for a pinned app, once
+ *   the watchdog has started it here).
  * - On every host: GET /.well-known/wl-served-by on any site answers 418 with `X-Served-By: <host>`, so
  *   site-probe (and you, with curl -I) can see which machine actually served a site.
  * The active host's routes are what matter; the others hold the same file so a promote or takeover just works.
  * The file before each change is kept in /opt/services/infra/backups/traefik-placement/; a failed check restores it.
  */
 import { pathToFileURL } from "node:url";
-import { SERVICES, hosts, loadJson, log, parseArgs, run, runOk, stamp, step } from "./lib.mjs";
+import { HOST_STATE, SERVICES, hosts, loadJson, log, parseArgs, pinned, run, runOk, stamp, step } from "./lib.mjs";
+import { composeArgs, ensureImages } from "./sync.mjs";
 
 const DYNAMIC = `${SERVICES}/infra/traefik/dynamic/placement.yml`;
 const BACKUPS = `${SERVICES}/infra/backups/traefik-placement`;
@@ -128,6 +130,64 @@ echo ${b64} | base64 -d | sudo tee ${DYNAMIC}.new >/dev/null && sudo mv ${DYNAMI
   log(`  applied; ${SERVED_BY_PATH} answers "${got}"`);
 }
 
+/** How docker compose runs `project` on h, from its containers (running or not); null if it has none there. */
+function composeOf(h, project) {
+  const line = run(h, `sudo docker ps -a --filter label=com.docker.compose.project=${project} --format '{{.Label "com.docker.compose.project.working_dir"}}|{{.Label "com.docker.compose.project.config_files"}}|{{.Label "com.docker.compose.project.environment_file"}}' | head -1`, { quiet: true });
+  if (!line) return null;
+  const [dir, files, envFile] = line.split("|");
+  return { project, dir, files: files.split(",").filter(Boolean), envFile: envFile || "" };
+}
+
+/**
+ * Pinned projects (hosts.json `pinned`): running on their owner, created but stopped on every other host. Also
+ * writes what the watchdog needs to take one over when its owner dies: host-state/pinned.tsv, and the planned
+ * placement.yml to put back when the owner returns. Leaves a host alone for a project whose owner is unreachable
+ * (it may be serving it after a takeover).
+ */
+function matchPinned(h, reachable, ips, text, { dryRun }) {
+  const rows = [];
+  for (const p of pinned()) {
+    const owner = reachable.find((x) => x.name === p.owner);
+    const here = composeOf(h, p.project);
+    const c = here || (owner && composeOf(owner, p.project));
+    if (c) rows.push([p.site, p.owner, ips[p.owner] || "", p.project, c.dir, composeArgs(c), p.refresh.join(",")].join("\t"));
+    if (!owner) {
+      log(`  ${p.project}: ${p.owner} unreachable, left as it is here`);
+      continue;
+    }
+    if (!c) {
+      log(`  ${p.project}: runs on neither ${h.name} nor ${p.owner}, nothing to do`);
+      continue;
+    }
+    if (dryRun) {
+      log(`  ${p.project}: would ${p.owner === h.name ? "run here (its host)" : `be stopped here (pinned to ${p.owner})`}`);
+      continue;
+    }
+    if (!runOk(h, `sudo test -f ${c.files[0] || `${c.dir}/compose.yml`}`)) {
+      log(`  ${p.project}: no compose file on ${h.name} (sync it from ${p.owner} first)`);
+      continue;
+    }
+    if (p.owner === h.name) {
+      run(h, `cd ${c.dir} && sudo docker compose ${composeArgs(c)} up -d --quiet-pull 2>&1 | tail -1`);
+      log(`  ${p.project}: running here (its host)`);
+    } else {
+      if (!here) {
+        ensureImages(owner, h, c);
+        run(h, `cd ${c.dir} && sudo docker compose ${composeArgs(c)} create --quiet-pull 2>&1 | tail -1`);
+      }
+      run(h, `cd ${c.dir} && sudo docker compose ${composeArgs(c)} stop 2>&1 | tail -1`);
+      log(`  ${p.project}: stopped here (pinned to ${p.owner})`);
+    }
+  }
+  if (dryRun) return;
+  const tsv = rows.length ? `${rows.join("\n")}\n` : "";
+  run(h, `sudo mkdir -p ${HOST_STATE}/watchdog
+echo ${Buffer.from(tsv).toString("base64")} | base64 -d | sudo tee ${HOST_STATE}/pinned.tsv >/dev/null
+echo ${Buffer.from(text).toString("base64")} | base64 -d | sudo tee ${HOST_STATE}/placement.planned.yml >/dev/null
+# Placement is what it should be again: any takeover the watchdog did here is over.
+sudo rm -f ${HOST_STATE}/watchdog/pinned-*`);
+}
+
 export function applyPlacement({ dryRun = false, only = null } = {}) {
   const { placement = {} } = loadJson("hosts/hosts.json");
   const all = hosts();
@@ -139,6 +199,7 @@ export function applyPlacement({ dryRun = false, only = null } = {}) {
     const { text, summary } = placementFor(h, { placement, ips, routers: traefikRouters(h) });
     summary.forEach((l) => log(`  ${l}`));
     if (!dryRun) apply(h, text);
+    matchPinned(h, reachable, ips, text, { dryRun });
   }
   for (const h of all.filter((x) => !reachable.includes(x))) log(`${h.name}: unreachable, not updated (run --apply again when it's back)`);
 }

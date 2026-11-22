@@ -6,8 +6,8 @@ projects with a copy of the data, ready to take over with one command.
 
 | Host | What it is | Notes |
 |---|---|---|
-| glados | 2014 MacBook Pro, Ubuntu | Owns the Bluetooth speaker, Home Assistant and the LAN DNS |
-| bouldergeist | Windows 11 PC, stack in WSL2 Ubuntu | Skips those hardware-bound projects |
+| glados | 2014 MacBook Pro, Ubuntu | The speaker is wired to it; runs the LAN DNS (coredns, bound to its LAN IP) |
+| bouldergeist | Windows 11 PC, stack in WSL2 Ubuntu | Runs everything but coredns; audio goes out of the PC (WSLg) |
 
 The list is `hosts/hosts.json`; the stateful data is `hosts/datasets.json`. Hosts reach each other over
 [Tailscale](https://tailscale.com) SSH, so they can be on any network and any OS (Windows via WSL2, Mac via an
@@ -36,7 +36,20 @@ Data can also be copied from GitHub: Actions → **Copy data between hosts** (a 
 ## Placement and the dashboard
 
 `hosts.json` `placement` maps a hostname to the host that serves it; everything else is served by the tunnel host.
-`placement.mjs --apply` writes a Traefik route file on every host (live reload). Grafana's **WL-Universe
+`placement.mjs --apply` writes a Traefik route file on every host (live reload).
+
+`hosts.json` `pinned` lists compose projects that must run on one host at a time (Home Assistant, the speaker
+and ambient-music: two copies would both drive the lights or the radio). They run on the host their site is
+placed on; `placement.mjs --apply` keeps every other host's copy created but stopped. Each host's watchdog:
+- takes a pinned app over when its owner's Traefik stops answering over Tailscale AND its site is down publicly
+  (3 minutes): starts the copy and serves the site locally;
+- hands it back once the owner answers again (5 minutes); what the copy saved meanwhile (Home Assistant's
+  history) stays on the host that ran it;
+- every 6 hours, while the owner is fine, copies the owner's compose folder, `refresh` folders (no databases or
+  logs) and any changed image, so a takeover starts from the current version and config (CI deploys pinned apps
+  to their owner only).
+
+Grafana's **WL-Universe
 Liveness** dashboard shows every site's liveness and the machine that served it, over time, from `site-probe.sh`
 (installed with the watchdog).
 
