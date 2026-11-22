@@ -26,7 +26,7 @@ After=docker.service network-online.target
 [Service]
 Type=oneshot
 ExecStart=${SERVICES}/bin/host-watchdog
-TimeoutStartSec=300
+TimeoutStartSec=900
 `;
 const PROBE_UNIT = `[Unit]
 Description=joed.dev public site probe (Grafana: WL-Universe Liveness; see r2pen2/devops ci/scripts/host/site-probe.sh)

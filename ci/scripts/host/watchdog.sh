@@ -14,7 +14,9 @@
 #   The sites are down while this host's tunnel runs (Traefik or an app is broken) → email once.
 # Testing: WATCHDOG_DRY=1 logs what it would do instead of doing it (and doesn't email);
 # WATCHDOG_PUBLIC=up|noorigin|down|unknown pretends the public checks said that; WATCHDOG_PEERS_STATE="name tunnel
-# <active-since>" pretends a peer answered that; --test-mail sends a test email.
+# <active-since>" pretends a peer answered that; WATCHDOG_OWNER=up|down and WATCHDOG_SITE=up|down pretend a pinned
+# app's owner answered (or not) and its site was up (or down); WATCHDOG_NO_MAIL=1 acts but doesn't email;
+# --test-mail sends a test email.
 # A promote pauses every watchdog (watchdog.pause-until) so a planned handover isn't mistaken for an outage.
 set -uo pipefail
 
@@ -48,7 +50,7 @@ tunnel_running() { [ "$(docker inspect -f '{{.State.Running}}' cloudflared 2>/de
 active_since() { cat "$STATE/active-since" 2>/dev/null || echo 0; }
 
 mail() {  # subject, body. Through this host's own site-mail, so it works whichever host is alive.
-  [ -n "$DRY" ] && { log "would email: $1"; return; }
+  if [ -n "$DRY" ] || [ -n "${WATCHDOG_NO_MAIL:-}" ]; then log "would email: $1"; return; fi
   local key; key=$(grep -m1 '^SITE_MAIL_API_KEY=' "$MAIL_ENV" 2>/dev/null | cut -d= -f2- | tr -d '"'"'")
   [ -n "$key" ] && [ -n "${ALERT_TO:-}" ] || { log "can't email: no site-mail key or ALERT_TO"; return; }
   jq -n --arg to "$ALERT_TO" --arg s "[hosts] $1" --arg t "$2" '{site:"billing",to:$to,subject:$s,text:$t,priority:"high"}' |
@@ -98,6 +100,132 @@ stop_tunnel() {
 if [ "${1:-}" = --test-mail ]; then
   mail "test from $HOST_NAME" "The host watchdog on $HOST_NAME can email you. Nothing is wrong."; echo sent; exit 0
 fi
+
+# ---- pinned apps (hosts.json `pinned`, written to pinned.tsv by placement.mjs --apply), on every host.
+# A pinned app runs only on its owner. When the owner is gone (its Traefik doesn't answer over Tailscale) AND
+# its site is down publicly, for PIN_AFTER checks in a row, start the app here and serve its site from here.
+# Once the owner answers again for HANDBACK_AFTER checks, stop it here and put the planned routes back. While the
+# owner is fine, copy its `refresh` folders here every REFRESH_HOURS, so a takeover starts from recent config.
+PIN_AFTER=3
+HANDBACK_AFTER=5
+REFRESH_HOURS=6
+PINNED_TSV=${WATCHDOG_PINNED_TSV:-$STATE/pinned.tsv}   # tests: a list with just one site
+PLACEMENT=/opt/services/infra/traefik/dynamic/placement.yml
+
+peer_target() { local p; for p in $PEERS; do [ "${p%%=*}" = "$1" ] && echo "${p#*=}"; done; }
+pin_slug() { echo "$1" | tr -c 'a-zA-Z0-9\n' '-' | tr 'A-Z' 'a-z'; }
+owner_answers() {  # the owner's Traefik, over Tailscale: placement.mjs's served-by route answers 418
+  [ -n "${WATCHDOG_OWNER:-}" ] && { [ "$WATCHDOG_OWNER" = up ]; return; }
+  [ "$(curl -s -o /dev/null -m 6 -w '%{http_code}' -H 'Host: wl-watchdog.invalid' "http://$1/.well-known/wl-served-by" || true)" = 418 ]
+}
+site_down() {  # publicly: Cloudflare or the active host's Traefik has nothing healthy (5xx). 000 = our own network.
+  [ -n "${WATCHDOG_SITE:-}" ] && { [ "$WATCHDOG_SITE" = down ]; return; }
+  case "$(curl -s -o /dev/null -m 15 -w '%{http_code}' "https://$1/" || true)" in 5??) return 0 ;; *) return 1 ;; esac
+}
+pinned_compose() {  # site, compose verb...: run it for every project of the site, as placement.mjs recorded them
+  local site=$1; shift
+  awk -F'\t' -v s="$site" '$1 == s { print $5 "\t" $6 }' "$PINNED_TSV" | while IFS=$'\t' read -r dir args; do
+    # shellcheck disable=SC2086
+    (cd "$dir" && docker compose $args "$@" >/dev/null 2>&1) || log "docker compose $* failed in $dir"
+  done
+}
+serve_pinned_here() {  # drop the route that sends the site to its owner; this host's own route takes it
+  local router="place-$(pin_slug "$1")" tmp
+  tmp=$(mktemp)
+  { echo "# Taken over by host-watchdog on $(date -Is): $1 is served here while its host is down."
+    grep -v '^#' "$PLACEMENT" | jq --arg r "$router" 'del(.http.routers[$r])'; } > "$tmp" && install -m 644 "$tmp" "$PLACEMENT"
+  rm -f "$tmp"
+}
+
+# From the owner: each project's compose folder and `refresh` folders (no databases or logs), and any image that
+# changed there (streamed: private images may not pull here), then re-create the stopped containers to match.
+refresh_pinned() {
+  local site=$1 owner=$2 target=$3 dir args extra d img mine theirs
+  while IFS=$'\t' read -r dir args extra; do
+    for d in "${dir#/opt/services/}" ${extra//,/ }; do
+      mkdir -p "/opt/services/$d"
+      timeout 600 rsync -a --delete --exclude='*.db' --exclude='*.db-*' --exclude='*.log' --exclude='*.log.*' \
+        -e "ssh -o BatchMode=yes -o ConnectTimeout=8" --rsync-path="sudo rsync" "$target:/opt/services/$d/" "/opt/services/$d/" >/dev/null 2>&1 \
+        || log "couldn't refresh $d from $owner"
+    done
+    # shellcheck disable=SC2086
+    for img in $(cd "$dir" && docker compose $args config --images 2>/dev/null); do
+      mine=$(docker image inspect -f '{{.Id}}' "$img" 2>/dev/null)
+      theirs=$(timeout 30 ssh -n -o BatchMode=yes -o ConnectTimeout=8 "$target" "sudo docker image inspect -f '{{.Id}}' '$img'" 2>/dev/null)
+      [ -n "$theirs" ] && [ "$theirs" != "$mine" ] || continue
+      # Public images: pull (anonymously: root's GHCR login is an expired CI token). Private ones: stream.
+      d=$(mktemp -d)
+      if DOCKER_CONFIG=$d timeout 900 docker pull -q "$img" >/dev/null 2>&1; then rm -rf "$d"; continue; fi
+      rm -rf "$d"
+      timeout 800 ssh -o BatchMode=yes -o ConnectTimeout=8 "$target" "sudo docker save '$img'" </dev/null | docker load -q >/dev/null 2>&1 \
+        && log "refreshed image $img from $owner" || log "couldn't copy image $img from $owner"
+    done
+    # shellcheck disable=SC2086
+    (cd "$dir" && docker compose $args create >/dev/null 2>&1) || log "couldn't re-create $dir"
+  done < <(awk -F'\t' -v s="$site" '$1 == s { print $5 "\t" $6 "\t" $7 }' "$PINNED_TSV")
+}
+
+pinned_apps() {
+  [ -s "$PINNED_TSV" ] || return 0
+  local site owner ip projects marker n target last dirs d since fresh
+  while IFS=$'\t' read -r site owner ip; do
+    [ "$owner" = "$HOST_NAME" ] && continue
+    projects=$(awk -F'\t' -v s="$site" '$1 == s { printf "%s ", $4 }' "$PINNED_TSV")
+    marker="$W/pinned-$(pin_slug "$site")"
+    if [ -f "$marker" ]; then
+      # Serving it here. Hand it back once the owner is steadily back.
+      if [ -n "$ip" ] && owner_answers "$ip"; then
+        n=$(count "handback-$site")
+        log "$owner answers again; $site handback ($n/$HANDBACK_AFTER)"
+        if [ "$n" -ge "$HANDBACK_AFTER" ]; then
+          since=$(cat "$marker" 2>/dev/null || echo "the takeover")
+          if [ -n "$DRY" ]; then log "would stop $projects and route $site back to $owner"; else
+            pinned_compose "$site" stop
+            [ -f "$STATE/placement.planned.yml" ] && install -m 644 "$STATE/placement.planned.yml" "$PLACEMENT"
+            rm -f "$marker"
+          fi
+          reset "handback-$site"
+          log "handed $site back to $owner"
+          mail "$site is back on $owner" "$owner answers again, so $HOST_NAME stopped its copy of $projects and sends $site to $owner again.
+
+Anything $site saved while $HOST_NAME ran it (since $since) stayed on $HOST_NAME and isn't on $owner (for Home Assistant: history and recorder data; config changes you made there)."
+        fi
+      else
+        reset "handback-$site"
+      fi
+      continue
+    fi
+    if [ -n "$ip" ] && owner_answers "$ip"; then
+      reset "pin-$site"
+      # Keep this host's (stopped) copy current: CI deploys pinned apps to their owner only.
+      last=$(stat -c %Y "$W/refreshed-$(pin_slug "$site")" 2>/dev/null || echo 0)
+      target=$(peer_target "$owner")
+      if [ -n "$target" ] && [ $(( now - last )) -ge $(( REFRESH_HOURS * 3600 )) ] && [ -z "$DRY" ]; then
+        refresh_pinned "$site" "$owner" "$target"
+        touch "$W/refreshed-$(pin_slug "$site")"
+      fi
+      continue
+    fi
+    # The owner doesn't answer. Only act if the site is really down for everyone (not just our view of the owner).
+    if ! site_down "$site"; then reset "pin-$site"; continue; fi
+    n=$(count "pin-$site")
+    log "$owner doesn't answer and $site is down ($n/$PIN_AFTER)"
+    [ "$n" -ge "$PIN_AFTER" ] || continue
+    if [ -n "$DRY" ]; then log "would start $projects and serve $site here"; else
+      pinned_compose "$site" up -d
+      serve_pinned_here "$site"
+      date -Is > "$marker"
+    fi
+    reset "pin-$site"
+    log "took over $site ($projects) from $owner"
+    fresh=$(stat -c %y "$W/refreshed-$(pin_slug "$site")" 2>/dev/null | cut -c1-16)
+    mail "$HOST_NAME TOOK OVER $site" "$site was down and $owner (its host) doesn't answer over Tailscale, so $HOST_NAME started its copy of $projects and serves $site now.
+
+Its config is from ${fresh:-the last sync ($(cat "$STATE/last-sync" 2>/dev/null || echo unknown))}; databases (Home Assistant's history) start fresh here.
+When $owner is back, $HOST_NAME hands $site back on its own within a few minutes."
+  done < <(cut -f1-3 "$PINNED_TSV" | sort -u)
+}
+pinned_apps
 public=${WATCHDOG_PUBLIC:-$(public_state)}
 
 if tunnel_running; then

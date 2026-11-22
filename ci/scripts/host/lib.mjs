@@ -36,6 +36,19 @@ export function host(name) {
   return h;
 }
 
+/**
+ * Pinned compose projects (hosts.json `pinned`): each runs on ONE host at a time, the one its site is placed on
+ * (hosts.json `placement`). [{ project, site, owner, refresh: [paths under /opt/services] }]
+ */
+export function pinned() {
+  const { pinned: list = {}, placement = {} } = loadJson("hosts/hosts.json");
+  return Object.entries(list).filter(([k]) => !k.startsWith("$")).map(([project, p]) => {
+    const owner = placement[p.site];
+    if (!owner) throw new Error(`hosts.json: pinned ${project} → ${p.site}, but placement has no host for ${p.site}`);
+    return { project, site: p.site, owner, refresh: p.refresh || [] };
+  });
+}
+
 export function datasets() {
   return loadJson("hosts/datasets.json").datasets;
 }
@@ -49,8 +62,14 @@ export function isLocal(h) {
 /** How to reach a host: `address` (e.g. a LAN IP while it isn't on the tailnet yet), else its Tailscale name. */
 export const sshTarget = (h) => `${h.user}@${h.address || h.tailscale || h.name}`;
 const SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=accept-new"];
-/** The ssh command line, as a string, for scripts that run ON one host and reach ANOTHER. */
-export const sshCmd = (h) => `ssh ${SSH_OPTS.join(" ")} ${sshTarget(h)}`;
+/**
+ * The ssh command line, as a string, for scripts that run ON one host and reach ANOTHER. Scripts reach a host on
+ * ssh's stdin (run() pipes them to `bash -s`), so a nested ssh that only produces output must not read stdin:
+ * it would swallow the rest of the script, which then ends "successfully" without running it. That is how
+ * every Postgres copy silently did nothing. Use `{ stdin: true }` only when the remote side reads stdin
+ * (rsync's transport).
+ */
+export const sshCmd = (h, { stdin = false } = {}) => `ssh ${stdin ? "" : "-n "}${SSH_OPTS.join(" ")} ${sshTarget(h)}`;
 
 /**
  * Runs a bash script on a host (locally, or over SSH) and returns stdout. The script goes over stdin, so it never

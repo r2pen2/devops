@@ -47,7 +47,11 @@ node ci/scripts/host/status.mjs --data       # every dataset on every host, side
 By default the active host (the tunnel) serves every site. `hosts.json` `placement` pins a hostname to a host
 (`"home.joed.dev": "glados"`): the tunnel host's Traefik forwards that whole hostname to the owner's Traefik over
 Tailscale, which applies its own routes and sign-in. If the owner is down, the site falls back to the tunnel
-host's own copy, unless that host can't run it (its `skip` list), e.g. Home Assistant.
+host's own copy. Apps in `pinned` (Home Assistant, the speaker, ambient-music) run on their owner only, and every
+other host keeps a stopped copy; its watchdog starts it when the owner dies (owner's Traefik silent over
+Tailscale and the site down publicly, 3 min) and stops it when the owner is back (5 min), and refreshes the copy
+(compose folder, config, image) every 6 h. Watch for `pinned-*` markers in `/opt/services/host-state/watchdog/`
+(a takeover in progress) and `watchdog.mjs log`.
 - Change it: edit `placement`, then `node ci/scripts/host/placement.mjs` (plan) and `--apply` (every host; Traefik
   reloads `infra/traefik/dynamic/placement.yml` live, no restart; it checks the result and restores on failure),
   then `watchdog.mjs install` so the probe knows the new list. A site placed on a host must run there.
@@ -140,6 +144,7 @@ Datasets are in `hosts/datasets.json`. A new app with state needs an entry there
 
 ## Things that stay with one machine
 
-Home Assistant (host networking, Bluetooth over D-Bus), the speaker and music (PulseAudio, the paired LEXON
-MINO), the LAN DNS (coredns bound to glados' LAN IP) and glados-netwatch (its Wi-Fi). They're in bouldergeist's
-`skip`/`skipRepos`. While glados is off, they're down.
+Only the LAN DNS (coredns, bound to glados' LAN IP) and glados-netwatch (its Wi-Fi). Home Assistant, the speaker
+and ambient-music run on bouldergeist too (pinned: one copy at a time, see placement). On bouldergeist the radio
+plays out of the PC itself, through WSLg (bootstrap.sh's `wslg-pulse.service`); the physical speaker is wired to
+glados. Their deploy jobs (`skipRepos`) still run on glados' runners only.

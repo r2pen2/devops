@@ -9,9 +9,15 @@
     "https://billing.joed.dev/liveness"
   ],
   "placement": {
-    "$comment": "hostname → the host that serves it. Unlisted sites are served by the active host (the tunnel). Apply with ci/scripts/host/placement.mjs --apply. Home Assistant and the radio need glados' Bluetooth and speaker.",
+    "$comment": "hostname → the host that serves it. Unlisted sites are served by the active host (the tunnel). Apply with ci/scripts/host/placement.mjs --apply. The radio is on glados because the speaker is wired to its headphone jack.",
     "home.joed.dev": "glados",
     "radio.joed.dev": "glados"
+  },
+  "pinned": {
+    "$comment": "Compose projects that must run on ONE host at a time (two Home Assistants would both drive the lights; two radios, two speakers): the host their `site` is placed on. Every other host keeps them created but stopped, and its watchdog starts them when that host dies (and stops them when it's back). `refresh`: folders under /opt/services those hosts copy from the owner every 6 hours (skipping databases and logs), so a takeover has recent config. placement.mjs --apply starts and stops them to match.",
+    "home-assistant": { "site": "home.joed.dev", "refresh": ["data/app-assets/home-assistant"] },
+    "speaker": { "site": "radio.joed.dev" },
+    "ambient-music": { "site": "radio.joed.dev" }
   },
   "watchdog": {
     "$comment": "ci/scripts/host/watchdog.sh, on every host: a standby takes over when these sites get Cloudflare's no-tunnel errors and the active host is gone; alerts go to alertTo through site-mail.",
@@ -25,16 +31,16 @@
       "user": "joe",
       "tailscale": "glados",
       "skip": [],
-      "notes": "2014 MacBook Pro, 4 threads, 7 GiB, Wi-Fi. Owns the Bluetooth speaker (LEXON MINO) and the LAN DNS (coredns on 10.0.0.172)."
+      "notes": "2014 MacBook Pro, 4 threads, 7 GiB, Wi-Fi. The speaker is wired to its headphone jack; it runs the LAN DNS (coredns on 10.0.0.172)."
     },
     {
       "name": "bouldergeist",
       "os": "windows-wsl",
       "user": "coolguyjoe",
       "tailscale": "bouldergeist",
-      "skip": ["home-assistant", "speaker", "music", "coredns"],
+      "skip": ["coredns"],
       "skipRepos": ["r2pen2/home-assistant", "r2pen2/speaker"],
-      "notes": "Windows 11 PC on the home LAN. The stack runs in a WSL2 Ubuntu distro with systemd and Docker Engine (not Docker Desktop); see host/windows/setup.ps1."
+      "notes": "Windows 11 PC on the home LAN. The stack runs in a WSL2 Ubuntu distro with systemd and Docker Engine (not Docker Desktop); see host/windows/setup.ps1. Plays audio through WSLg (the PC's own output; bootstrap.sh binds its socket where the speaker container looks). coredns binds glados' LAN address, so it stays there."
     }
   ]
 }
