@@ -1,0 +1,17 @@
+# music.joed.dev was Music Assistant (r2pen2/speaker), which never ran; the YouTube Music player is on
+# radio.joed.dev now. Send the old name there. Every host serves this (no placement needed): radio.joed.dev
+# itself is routed to whichever host runs the speaker.
+http:
+  routers:
+    music-redirect:
+      rule: "Host(`music.joed.dev`)"
+      entryPoints:
+        - web
+      middlewares:
+        - music-to-radio
+      service: noop@internal
+  middlewares:
+    music-to-radio:
+      redirectRegex:
+        regex: "^https?://music\\.joed\\.dev/?(.*)"
+        replacement: "https://radio.joed.dev/"
