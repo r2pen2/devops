@@ -26,6 +26,8 @@ import { HOST_STATE, SERVICES, datasets, guardTarget, host, loadJson, log, parse
 /** Never mirrored: per-PR previews, backups, archives, and fast-changing telemetry. Paths relative to /opt/services. */
 const EXCLUDES = [
   "/host-state/",
+  // Generated per host by placement.mjs (each host routes the others' sites to them): never copy one host's.
+  "/infra/traefik/dynamic/placement.yml",
   "/infra/backups/",
   "/data/backups/",
   "/data/archive/",
@@ -64,7 +66,7 @@ function mirrorFiles(from, to, { dryRun }) {
   step(`${from.name} → ${to.name}: mirror ${SERVICES}${dryRun ? " (dry run)" : ""}`);
   const raw = loadJson("hosts/datasets.json").rawDirs.map((d) => `/${d}/`);
   const excludes = [...EXCLUDES, ...raw].map((e) => `--exclude='${e}'`).join(" ");
-  const ssh = sshCmd(from);
+  const ssh = sshCmd(from, { stdin: true });   // rsync talks to its remote over ssh's stdin
   const remote = `${sshTarget(from)}`;
   const rsync = `sudo rsync -aH --numeric-ids --delete ${dryRun ? "--dry-run --stats" : "--stats"} -e "sudo -u $(id -un) ${ssh.replace(/ \S+$/, "")}" --rsync-path="sudo rsync"`;
   const out = run(to, `sudo mkdir -p ${SERVICES} ${HOST_STATE}/cron /root/.docker
