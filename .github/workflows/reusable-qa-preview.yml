@@ -1,4 +1,4 @@
-# Reusable: PR QA preview (build pr-N tags, deploy on glados, sticky comment).
+# Reusable: PR QA preview (build pr-N tags, deploy on the active host, sticky comment).
 name: QA preview (reusable)
 
 on:
@@ -74,7 +74,7 @@ jobs:
           plain-docker: ${{ inputs.plain-docker && 'true' || 'false' }}
 
   deploy:
-    name: deploy on glados
+    name: deploy
     needs: [detect, build]
     if: needs.detect.outputs.has_apps == 'true'
     runs-on: [self-hosted, glados]
