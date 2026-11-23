@@ -3,6 +3,9 @@
  * Tear down ephemeral QA projects for a PR and update active.json.
  *
  *   node scripts/qa/cleanup-pr.mjs --catalog deploy/apps.json --pr 42 [--prune-images]
+ *   node scripts/qa/cleanup-pr.mjs ... [--pr 42] --sweep --open 92,94   # also: delete every non-open PR's leftovers
+ *
+ * Per-PR data of cms apps is removed with the catalog's qaSeed script ("cleanup", "sweep").
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -10,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCatalog, resolveImageName } from "../lib/catalog.mjs";
 import { qaProjectName } from "../lib/naming.mjs";
+import { runSeed, seedApps, seedConfig } from "../lib/qa.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const infraRoot = path.resolve(__dirname, "../..");
@@ -24,6 +28,8 @@ function parseArgs(argv) {
     owner: "r2pen2",
     cwd: process.cwd(),
     firestoreScript: null,
+    sweep: false,
+    open: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -34,9 +40,13 @@ function parseArgs(argv) {
     else if (a === "--cwd" && argv[i + 1]) args.cwd = argv[++i];
     else if (a === "--firestore-script" && argv[i + 1]) {
       args.firestoreScript = argv[++i];
+    } else if (a === "--sweep") args.sweep = true;
+    else if (a === "--open" && argv[i + 1] !== undefined) {
+      args.open = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
     }
   }
-  if (!args.pr) throw new Error("--pr is required");
+  if (!args.pr && !args.sweep) throw new Error("--pr (or --sweep --open N,M) is required");
+  if (args.sweep && !args.open) throw new Error("--sweep needs --open (open PR numbers; may be empty)");
   return args;
 }
 
@@ -95,78 +105,77 @@ function pruneImages(catalog, pr, owner) {
   }
 }
 
-function cleanupFirestore(catalog, pr, owner, firestoreScript, cwd) {
-  if (!firestoreScript) return;
-  const cmsApps = catalog.qaApps.filter((a) => a.cms);
-  for (const entry of cmsApps) {
-    const tags = [`pr-${pr}`, "latest"];
-    let ok = false;
-    for (const tag of tags) {
-      const image = `${resolveImageName(catalog, owner, entry.app)}:${tag}`;
-      try {
-        execFileSync("sudo", ["docker", "image", "inspect", image], {
-          stdio: "ignore",
-        });
-        const scriptPath = path.resolve(cwd, firestoreScript);
-        run(
-          "sudo",
-          [
-            "docker",
-            "run",
-            "--rm",
-            "-v",
-            "/opt/services/data/app-env:/opt/services/data/app-env:ro",
-            "-v",
-            `${path.dirname(scriptPath)}:/repo/scripts:ro`,
-            "--entrypoint",
-            "node",
-            image,
-            `/repo/scripts/${path.basename(scriptPath)}`,
-            "cleanup",
-            "--pr",
-            String(pr),
-            "--app",
-            entry.app,
-          ],
-          { allowFail: true },
-        );
-        ok = true;
-        break;
-      } catch {
-        // next tag
-      }
+function cleanupSeeded(catalog, pr, owner, firestoreScript, cwd) {
+  const seed = seedConfig(catalog, firestoreScript);
+  if (!seed) return;
+  for (const app of seedApps(catalog)) {
+    try {
+      runSeed({ catalog, owner, cwd, seed, app, pr, args: ["cleanup", "--pr", String(pr), "--app", app] });
+    } catch (err) {
+      // Keep tearing down the rest; a later --sweep retries leftovers.
+      console.error(`::warning::seed cleanup failed for ${app}: ${err.message}`);
     }
-    if (!ok) {
-      console.warn(`firestore cleanup skipped for ${entry.app}`);
+  }
+}
+
+/** Delete the data and folders of every PR not in openPrs (leftovers of failed cleanups). */
+function sweep(catalog, openPrs, owner, firestoreScript, cwd) {
+  const keep = openPrs.map(String);
+  const seed = seedConfig(catalog, firestoreScript);
+  const apps = seedApps(catalog);
+  if (seed && !seed.legacy && apps.length) {
+    try {
+      runSeed({ catalog, owner, cwd, seed, app: apps[0], pr: null, args: ["sweep", "--keep", keep.join(","), "--apps", apps.join(",")] });
+    } catch (err) {
+      console.error(`::warning::seed sweep failed: ${err.message}`);
     }
+  }
+  // pr-N folders are shared by every repo previewing on this host (PR numbers overlap), so only
+  // this catalog's apps' folders go, and a pr-N folder only once nothing else is left in it.
+  const own = catalog.qaApps.map((a) => a.app).join(" ");
+  for (const root of [QA_ASSETS_ROOT, QA_COMPOSE_ROOT]) {
+    sh(
+      `for d in ${JSON.stringify(root)}/pr-*; do [ -d "$d" ] || continue; n="\${d##*/pr-}"; ` +
+        `case ",${keep.join(",")}," in *",$n,"*) continue;; esac; ` +
+        `for a in ${own}; do [ -e "$d/$a" ] && echo "removing stale $d/$a" && sudo rm -rf "$d/$a"; done; ` +
+        `sudo rmdir "$d" 2>/dev/null || true; done`,
+      true,
+    );
   }
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const catalog = loadCatalog(args.catalog, args.cwd);
+  if (!args.pr) {
+    sweep(catalog, args.open, args.owner, args.firestoreScript, args.cwd);
+    return;
+  }
 
   for (const entry of catalog.qaApps) {
     cleanupOne(args.pr, entry.app);
   }
-  cleanupFirestore(
-    catalog,
-    args.pr,
-    args.owner,
-    args.firestoreScript,
-    args.cwd,
-  );
-  sh(`sudo rm -rf ${JSON.stringify(path.join(QA_COMPOSE_ROOT, `pr-${args.pr}`))}`, true);
-  sh(`sudo rm -rf ${JSON.stringify(path.join(QA_ASSETS_ROOT, `pr-${args.pr}`))}`, true);
+  cleanupSeeded(catalog, args.pr, args.owner, args.firestoreScript, args.cwd);
+  // Other repos' previews can share pr-N (PR numbers overlap): only drop the folder once it's empty.
+  sh(`sudo rmdir ${JSON.stringify(path.join(QA_COMPOSE_ROOT, `pr-${args.pr}`))} 2>/dev/null || true`, true);
+  sh(`sudo rmdir ${JSON.stringify(path.join(QA_ASSETS_ROOT, `pr-${args.pr}`))} 2>/dev/null || true`, true);
 
-  run("node", [
-    path.join(infraRoot, "scripts/qa/update-active-json.mjs"),
-    "remove",
-    "--pr",
-    String(args.pr),
-  ]);
+  // Per app, so another repo's entries for the same PR number stay.
+  for (const entry of catalog.qaApps) {
+    run("node", [
+      path.join(infraRoot, "scripts/qa/update-active-json.mjs"),
+      "remove",
+      "--pr",
+      String(args.pr),
+      "--app",
+      entry.app,
+    ]);
+  }
 
   if (args.pruneImages) pruneImages(catalog, args.pr, args.owner);
+  if (args.sweep) {
+    sweep(catalog, args.open.filter((n) => n !== String(args.pr)), args.owner, args.firestoreScript, args.cwd);
+  }
 
   console.log(
     JSON.stringify(

@@ -18,13 +18,31 @@ permissions:
 
 jobs:
   cleanup:
-    name: teardown QA on glados
+    name: teardown
     runs-on: [self-hosted, glados]
     steps:
       - uses: actions/checkout@v4
 
+      # Open PRs keep their previews; every other PR's leftovers (this repo's apps only) are swept.
+      # If GitHub can't be asked, open-prs stays unset and only this PR is cleaned up.
+      - name: List open PRs
+        id: open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          if open=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN"               "https://api.github.com/repos/$REPO/pulls?state=open&per_page=100"               | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).map(p=>p.number).join(",")))'); then
+            echo "open PRs: ${open:-none}"
+            echo "prs=${open}" >> "$GITHUB_OUTPUT"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Couldn't list open PRs; cleaning up this PR only"
+          fi
+
       - uses: r2pen2/devops/ci/actions/qa-cleanup@main
         with:
+          open-prs: ${{ steps.open.outputs.prs }}
+          sweep: ${{ steps.open.outputs.ok == 'true' && 'true' || 'false' }}
           catalog: ${{ inputs.catalog }}
           pr: ${{ github.event.pull_request.number }}
           owner: ${{ github.repository_owner }}

@@ -3,6 +3,10 @@
  * Deploy ephemeral QA compose projects on glados for a PR.
  *
  *   node scripts/qa/deploy-pr.mjs --catalog deploy/apps.json --pr 42 --apps web --sha abc --owner r2pen2
+ *
+ * Each app's catalog companions are deployed first (with :pr-N, or the catalog's qaTagFallback if
+ * the PR didn't build them). Per app: qaPreDeploy commands, qaCopyFiles, qaCloneAssets, then the
+ * compose project, then the qaSeed script ("seed") for cms apps. See lib/catalog.mjs.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -10,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCatalog, resolveImageName } from "../lib/catalog.mjs";
 import { qaContainerName, qaProjectName, qaUrl } from "../lib/naming.mjs";
+import { expand, qaContext, resolveQaTag, runSeed, seedConfig } from "../lib/qa.mjs";
 import { generateCompose } from "./generate-compose.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -118,29 +123,35 @@ function ensureAssets(pr, app, entry, cwd) {
   return root;
 }
 
-function seedFirestore(pr, app, owner, catalog, firestoreScript, cwd) {
+function seed(pr, app, owner, catalog, firestoreScript, cwd) {
   const entry = catalog.byName[app];
-  if (!entry?.cms || !firestoreScript) return;
-  const image = `${resolveImageName(catalog, owner, app)}:pr-${pr}`;
-  const scriptPath = path.resolve(cwd, firestoreScript);
-  run("sudo", [
-    "docker",
-    "run",
-    "--rm",
-    "-v",
-    "/opt/services/data/app-env:/opt/services/data/app-env:ro",
-    "-v",
-    `${path.dirname(scriptPath)}:/repo/scripts:ro`,
-    "--entrypoint",
-    "node",
-    image,
-    `/repo/scripts/${path.basename(scriptPath)}`,
-    "seed",
-    "--pr",
-    String(pr),
-    "--app",
-    app,
-  ]);
+  const cfg = seedConfig(catalog, firestoreScript);
+  if (!entry?.cms || !cfg) return;
+  runSeed({ catalog, owner, cwd, seed: cfg, app, pr, args: ["seed", "--pr", String(pr), "--app", app] });
+}
+
+/** The app's qaPreDeploy commands, qaCopyFiles and qaCloneAssets. */
+function prepare(pr, app, entry, catalog, cwd) {
+  const ctx = qaContext(catalog, pr, app);
+  for (const cmd of entry.qaPreDeploy) {
+    console.log(`+ (${app} pre-deploy) ${expand(cmd, ctx)}`);
+    execFileSync("bash", ["-lc", expand(cmd, ctx)], { stdio: "inherit", cwd });
+  }
+  for (const { from, to } of entry.qaCopyFiles) {
+    const src = JSON.stringify(expand(from, ctx));
+    const dest = JSON.stringify(expand(to, ctx));
+    sh(`if sudo test -f ${dest}; then echo "present: ${dest}"; else sudo cp -p ${src} ${dest} && echo "copied: ${src} -> ${dest}"; fi`);
+  }
+  if (entry.qaCloneAssets) {
+    // Real copies, not links: a preview upload with a prod file name must not change prod's file.
+    // -n keeps what the preview already has and adds what prod gained since the last deploy.
+    const src = JSON.stringify(`${expand(entry.qaCloneAssets, ctx)}/.`);
+    const dest = JSON.stringify(`${ctx.assets}/`);
+    sh(
+      `if sudo test -d ${src}; then sudo cp -a -n ${src} ${dest} && echo "assets cloned into ${ctx.assets}"; ` +
+        `else echo "no assets to clone at ${src}"; fi`,
+    );
+  }
 }
 
 function deployOne({ catalog, pr, app, owner, sha, cwd, envExampleDir, firestoreScript }) {
@@ -149,6 +160,8 @@ function deployOne({ catalog, pr, app, owner, sha, cwd, envExampleDir, firestore
 
   ensureQaEnv(app, cwd, envExampleDir);
   ensureAssets(pr, app, entry, cwd);
+  prepare(pr, app, entry, catalog, cwd);
+  const tag = resolveQaTag(catalog, owner, pr, app);
 
   const project = qaProjectName(pr, app);
   const composeDir = path.join(QA_COMPOSE_ROOT, `pr-${pr}`, app);
@@ -160,7 +173,7 @@ function deployOne({ catalog, pr, app, owner, sha, cwd, envExampleDir, firestore
     pr,
     app,
     owner,
-    tag: `pr-${pr}`,
+    tag,
   });
   const tmp = path.join("/tmp", `qa-compose-${pr}-${app}.yml`);
   fs.writeFileSync(tmp, yaml);
@@ -170,7 +183,7 @@ function deployOne({ catalog, pr, app, owner, sha, cwd, envExampleDir, firestore
   try {
     run("sudo", ["docker", "compose", "-p", project, "-f", composeFile, "pull"]);
   } catch (err) {
-    const image = `${resolveImageName(catalog, owner, app)}:pr-${pr}`;
+    const image = `${resolveImageName(catalog, owner, app)}:${tag}`;
     try {
       execFileSync("sudo", ["docker", "image", "inspect", image], {
         stdio: "ignore",
@@ -180,7 +193,7 @@ function deployOne({ catalog, pr, app, owner, sha, cwd, envExampleDir, firestore
     }
   }
 
-  seedFirestore(pr, app, owner, catalog, firestoreScript, cwd);
+  seed(pr, app, owner, catalog, firestoreScript, cwd);
 
   run("sudo", [
     "docker",
@@ -218,6 +231,21 @@ function deployOne({ catalog, pr, app, owner, sha, cwd, envExampleDir, firestore
   };
 }
 
+/** apps, with each one's companions (and theirs) ahead of it, each app once. */
+export function withCompanions(catalog, apps) {
+  const out = [];
+  const visit = (app, chain = []) => {
+    if (out.includes(app)) return;
+    if (chain.includes(app)) throw new Error(`Companion cycle: ${[...chain, app].join(" -> ")}`);
+    const entry = catalog.byName[app];
+    if (!entry) throw new Error(`Unknown app: ${app}`);
+    for (const c of entry.companions) visit(c, [...chain, app]);
+    out.push(app);
+  };
+  for (const app of apps) visit(app);
+  return out;
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const catalog = loadCatalog(args.catalog, args.cwd);
@@ -230,7 +258,7 @@ function main() {
   // otherwise fails with EACCES, because the sudo mkdir above made it root's.
   sh(`sudo chown "$(id -u):$(id -g)" ${JSON.stringify(QA_ASSETS_ROOT)}`);
   const deployments = [];
-  for (const app of args.apps) {
+  for (const app of withCompanions(catalog, args.apps)) {
     deployments.push(
       deployOne({
         catalog,
@@ -251,4 +279,5 @@ function main() {
   }
 }
 
-main();
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) main();

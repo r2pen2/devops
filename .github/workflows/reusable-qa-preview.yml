@@ -19,6 +19,20 @@ on:
     secrets:
       GHCR_TOKEN:
         required: false
+    # For the caller's own jobs after the preview (checks against the deployed hosts, etc.).
+    outputs:
+      apps:
+        description: JSON array of the apps this PR changed
+        value: ${{ jobs.detect.outputs.apps }}
+      apps_csv:
+        description: The same, comma-separated
+        value: ${{ jobs.detect.outputs.apps_csv }}
+      has_apps:
+        description: "'true' if any app changed"
+        value: ${{ jobs.detect.outputs.has_apps }}
+      deployments:
+        description: JSON array of {app,url,...} deployed (companions included)
+        value: ${{ jobs.deploy.outputs.deployments }}
 
 permissions:
   contents: read
@@ -48,10 +62,15 @@ jobs:
           scope: qa
 
   build:
-    name: build pr images
+    name: build (${{ matrix.app }})
     needs: detect
     if: needs.detect.outputs.has_apps == 'true'
     runs-on: ubuntu-latest
+    # One job per app, all at once (each shows separately in the Actions UI).
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.detect.outputs.apps) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -67,7 +86,7 @@ jobs:
       - uses: r2pen2/devops/ci/actions/build-push@main
         with:
           catalog: ${{ inputs.catalog }}
-          apps: ${{ needs.detect.outputs.apps_csv }}
+          apps: ${{ matrix.app }}
           owner: ${{ github.repository_owner }}
           sha: ${{ github.sha }}
           tag-prefix: pr-${{ github.event.pull_request.number }}
