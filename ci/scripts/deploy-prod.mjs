@@ -84,7 +84,10 @@ function deployOne(catalog, appName, cwd, sha) {
   run("sudo", ["mkdir", "-p", destDir]);
   run("sudo", ["cp", composeSrc, composeFile]);
 
-  const env = { ...process.env };
+  // sudo -E keeps the runner's HOME (so the image tag below reaches compose), which would make docker read the
+  // runner user's ~/.docker: no GHCR login there, so private images pull anonymously and fail "unauthorized"
+  // (bouldergeist). The deploy action logs in with `sudo docker login`, i.e. into root's config: use that.
+  const env = { ...process.env, DOCKER_CONFIG: "/root/.docker" };
   if (entry.imageTagEnv && sha) {
     env[entry.imageTagEnv] = sha;
   }
