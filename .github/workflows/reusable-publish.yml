@@ -138,7 +138,7 @@ jobs:
           plain-docker: ${{ inputs.plain-docker && 'true' || 'false' }}
 
   deploy:
-    name: deploy on glados
+    name: deploy
     needs: [detect, publish]
     if: |
       always() &&
