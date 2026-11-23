@@ -17,6 +17,14 @@ inputs:
   firestore-script:
     required: false
     default: ""
+  sweep:
+    description: Also remove leftovers of every PR not in open-prs (this catalog's apps only)
+    required: false
+    default: "false"
+  open-prs:
+    description: Comma-separated open PR numbers, for sweep
+    required: false
+    default: ""
   working-directory:
     required: false
     default: "."
@@ -33,6 +41,8 @@ runs:
         CATALOG: ${{ inputs.catalog }}
         PRUNE: ${{ inputs.prune-images }}
         FIRESTORE: ${{ inputs.firestore-script }}
+        SWEEP: ${{ inputs.sweep }}
+        OPEN_PRS: ${{ inputs.open-prs }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
@@ -43,6 +53,9 @@ runs:
         fi
         if [[ -n "${FIRESTORE}" ]]; then
           extra+=(--firestore-script "${FIRESTORE}")
+        fi
+        if [[ "${SWEEP}" == "true" ]]; then
+          extra+=(--sweep --open "${OPEN_PRS}")
         fi
         node "${SCRIPT}" \
           --catalog "${CATALOG}" \

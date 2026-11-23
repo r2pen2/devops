@@ -60,7 +60,7 @@ function buildBody(deployments, { empty, teardown }) {
   }
   lines.push("");
   lines.push(
-    "Ephemeral stacks tear down when this PR closes. Ephemeral stacks tear down when this PR closes.",
+    "Ephemeral stacks tear down when this PR closes.",
   );
   return `${lines.join("\n")}\n`;
 }

@@ -22,10 +22,32 @@
  *       "extraVolumes": [],
  *       "watchPaths": ["web/", "deploy/"],
  *       "buildArgs": { "PORT": "80" },  // optional docker build-args
- *       "qa": true                      // include in QA previews (default true if image)
+ *       "qa": true,                     // include in QA previews (default true if image)
+ *
+ *       // Optional QA preview extras. Strings may use {placeholders}: {pr} {app} {port}
+ *       // {container} {pkg} {assets} (this preview's asset dir) {prodAssets} {cmsPrefix}
+ *       // {host:<app>} / {url:<app>} (another app's preview host / https URL).
+ *       "companions": ["api"],          // deployed first with this app, even if the PR didn't change them
+ *       "qaVolumes": ["{prodAssets}/x:/x:ro"],
+ *       "qaEnvironment": { "API_URL": "{url:api}" },
+ *       "qaPreDeploy": ["sudo bash scripts/x.sh"],   // run in the repo checkout before deploying
+ *       "qaCloneAssets": "/opt/services/data/app-assets/x",  // copied into {assets} (cp -a -n)
+ *       "qaCopyFiles": [{ "from": "/a", "to": "/b" }]        // sudo cp -p, only if "to" is missing
  *     }
- *   ]
+ *   ],
+ *
+ *   // Optional, top level:
+ *   "sharedPaths": ["package-lock.json"],   // changes here select every app (default: see detect-changed-apps)
+ *   "qaTagFallback": "latest",              // use this tag when an app has no :pr-N image (e.g. companions)
+ *   "qaSeed": {                             // seed/cleanup/sweep per-PR data for "cms": true apps
+ *     "script": "scripts/qa/firestore-qa.mjs",  // run with node inside an image, args: seed|cleanup|sweep
+ *     "image": "cms",                       // app whose image runs it (default: the app itself)
+ *     "nodePath": "/repo/packages/cms/node_modules",
+ *     "mounts": ["scripts", "deploy"]       // repo dirs mounted read-only at /repo/<dir>
+ *   }
  * }
+ *
+ * watchPaths entries: "dir/" (prefix), "file" (exact or dir), "re:<regex>", and "!..." to exclude.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -50,6 +72,9 @@ export function loadCatalog(catalogPath, cwd = process.cwd()) {
   return {
     imagePrefix: raw.imagePrefix,
     qaHostDomain,
+    sharedPaths: Array.isArray(raw.sharedPaths) ? raw.sharedPaths : null,
+    qaTagFallback: raw.qaTagFallback || null,
+    qaSeed: raw.qaSeed || null,
     apps,
     byName,
     publishApps: apps,
@@ -80,6 +105,12 @@ function normalizeApp(a, imagePrefix) {
     qa: a.qa !== false && image,
     imageTagEnv: a.imageTagEnv || null,
     networks: a.networks || ["proxy"],
+    companions: a.companions || [],
+    qaVolumes: a.qaVolumes || [],
+    qaEnvironment: a.qaEnvironment || {},
+    qaPreDeploy: a.qaPreDeploy || [],
+    qaCloneAssets: a.qaCloneAssets || null,
+    qaCopyFiles: a.qaCopyFiles || [],
   };
 }
 

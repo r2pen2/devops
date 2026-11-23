@@ -4,11 +4,13 @@
  *
  * Supports kinds: static | spa | express | api (all Traefik Host(pr-N-app.domain))
  * SPA+cms mounts prod assets/SA read-only and sets CMS_COLLECTION_PREFIX.
+ * An app's qaVolumes and qaEnvironment (with {placeholders}, see lib/catalog.mjs) are added last.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCatalog, resolveImageName } from "../lib/catalog.mjs";
+import { expand, qaContext } from "../lib/qa.mjs";
 import {
   cmsCollectionPrefix,
   qaContainerName,
@@ -98,6 +100,16 @@ export function generateCompose({ catalog, pr, app, owner, tag }) {
     environment.push(
       `      CMS_COLLECTION_PREFIX: ${yamlQuote(cmsCollectionPrefix(pr))}`,
     );
+  }
+
+  const ctx = qaContext(catalog, pr, app);
+  for (const v of entry.qaVolumes) volumes.push(`      - ${expand(v, ctx)}`);
+  for (const [k, v] of Object.entries(entry.qaEnvironment)) {
+    // The app's own value replaces a default above rather than repeating the key (invalid YAML).
+    const i = environment.findIndex((line) => line.trimStart().startsWith(`${k}:`));
+    const line = `      ${k}: ${yamlQuote(expand(v, ctx))}`;
+    if (i >= 0) environment[i] = line;
+    else environment.push(line);
   }
 
   const volumeBlock =
