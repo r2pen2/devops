@@ -12,6 +12,11 @@
 #   wl_site_up{site}  wl_site_http_status{site}  wl_site_response_seconds{site}
 #   wl_site_served_by{site,host} 1   wl_site_served_by_index{site} (position in hosts.json, 0 = unknown)
 #   wl_site_probe_timestamp_seconds
+# And every host's power and role (this one locally, the others over the watchdog's SSH), so whichever host
+# serves Grafana has the history of a host that died, e.g. glados' battery running down:
+#   wl_host_reachable{host}  wl_host_battery_percent{host}  wl_host_on_ac{host} (1 = charger connected)
+#   wl_host_battery_state{host} (1 charging, 0 full / not charging, -1 discharging)
+#   wl_host_tunnel{host} (1 = the active host)  wl_host_pinned_takeover{host,app} (1 = serving it for a dead owner)
 set -uo pipefail
 
 CONF=/opt/services/host-state/watchdog.env
@@ -44,6 +49,26 @@ probe() {
 export -f probe
 results=$(printf '%s\n' $sites | xargs -P 8 -I{} bash -c 'probe "$@"' _ {})
 
+# One line per host: "ok|<battery %>|<battery status>|<on AC 0/1>|<tunnel 0/1>|<pinned takeovers>".
+POWER='cap=""; st=""; ac=""
+for b in /sys/class/power_supply/*; do
+  case "$(cat "$b/type" 2>/dev/null)" in
+    Battery) cap=$(cat "$b/capacity" 2>/dev/null); st=$(cat "$b/status" 2>/dev/null) ;;
+    Mains) [ "$(cat "$b/online" 2>/dev/null)" = 1 ] && ac=1 || ac=${ac:-0} ;;
+  esac
+done
+t=0; [ "$(sudo -n docker inspect -f "{{.State.Running}}" cloudflared 2>/dev/null)" = true ] && t=1
+m=$(ls /opt/services/host-state/watchdog/ 2>/dev/null | sed -n "s/^pinned-//p" | tr "\n" " ")
+echo "ok|$cap|$st|$ac|$t|$m"'
+power_b64=$(printf '%s' "$POWER" | base64 -w0)
+hosts_power=$( {
+  echo "$HOST_NAME $(bash -c "$POWER" 2>/dev/null)"
+  for p in ${PEERS:-}; do
+    out=$(timeout 15 ssh -n -o BatchMode=yes -o ConnectTimeout=6 "${p#*=}" "echo $power_b64 | base64 -d | bash" 2>/dev/null | tail -1)
+    echo "${p%%=*} ${out:-down}"
+  done
+} )
+
 # Each metric's lines must be together for Pushgateway: sort groups them by name.
 {
   while read -r site code secs sb; do
@@ -58,5 +83,20 @@ results=$(printf '%s\n' $sites | xargs -P 8 -I{} bash -c 'probe "$@"' _ {})
     echo "wl_site_served_by_index{site=\"$site\"} $idx"
     [ -n "$sb" ] && echo "wl_site_served_by{site=\"$site\",host=\"$sb\"} 1"
   done <<< "$results"
+  while read -r h line; do
+    [ -n "$h" ] || continue
+    if [ "${line%%|*}" != ok ]; then echo "wl_host_reachable{host=\"$h\"} 0"; continue; fi
+    IFS='|' read -r _ cap st ac t m <<< "$line"
+    echo "wl_host_reachable{host=\"$h\"} 1"
+    echo "wl_host_tunnel{host=\"$h\"} ${t:-0}"
+    [ -n "$cap" ] && echo "wl_host_battery_percent{host=\"$h\"} $cap"
+    [ -n "$ac" ] && echo "wl_host_on_ac{host=\"$h\"} $ac"
+    case "$st" in
+      Charging) echo "wl_host_battery_state{host=\"$h\"} 1" ;;
+      Discharging) echo "wl_host_battery_state{host=\"$h\"} -1" ;;
+      ?*) echo "wl_host_battery_state{host=\"$h\"} 0" ;;
+    esac
+    for a in $m; do echo "wl_host_pinned_takeover{host=\"$h\",app=\"$a\"} 1"; done
+  done <<< "$hosts_power"
   echo "wl_site_probe_timestamp_seconds $(date +%s)"
 } | LC_ALL=C sort | curl -s -m 10 -X PUT --data-binary @- "$PUSH" >/dev/null || echo "push to $PUSH failed"
