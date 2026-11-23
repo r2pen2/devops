@@ -54,7 +54,7 @@ jobs:
 
       - name: Detect
         id: detect
-        uses: r2pen2/devops/ci/actions/detect-changed@main
+        uses: r2pen2/devops/ci/actions/detect-changed@qa/wl-universe-hooks
         with:
           catalog: ${{ inputs.catalog }}
           base: ${{ github.event.pull_request.base.sha }}
@@ -83,7 +83,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - uses: r2pen2/devops/ci/actions/build-push@main
+      - uses: r2pen2/devops/ci/actions/build-push@qa/wl-universe-hooks
         with:
           catalog: ${{ inputs.catalog }}
           apps: ${{ matrix.app }}
@@ -113,7 +113,7 @@ jobs:
         run: echo "${GHCR_PASSWORD}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - id: deploy
-        uses: r2pen2/devops/ci/actions/qa-deploy@main
+        uses: r2pen2/devops/ci/actions/qa-deploy@qa/wl-universe-hooks
         with:
           catalog: ${{ inputs.catalog }}
           apps: ${{ needs.detect.outputs.apps_csv }}
@@ -130,7 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: r2pen2/devops/ci/actions/tooling@main
+      - uses: r2pen2/devops/ci/actions/tooling@qa/wl-universe-hooks
 
       - name: Sticky comment
         env:

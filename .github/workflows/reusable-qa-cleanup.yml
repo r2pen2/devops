@@ -39,7 +39,7 @@ jobs:
             echo "::warning::Couldn't list open PRs; cleaning up this PR only"
           fi
 
-      - uses: r2pen2/devops/ci/actions/qa-cleanup@main
+      - uses: r2pen2/devops/ci/actions/qa-cleanup@qa/wl-universe-hooks
         with:
           open-prs: ${{ steps.open.outputs.prs }}
           sweep: ${{ steps.open.outputs.ok == 'true' && 'true' || 'false' }}
@@ -55,7 +55,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: r2pen2/devops/ci/actions/tooling@main
+      - uses: r2pen2/devops/ci/actions/tooling@qa/wl-universe-hooks
 
       - name: Mark torn down
         env:
